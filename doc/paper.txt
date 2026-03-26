@@ -1,0 +1,956 @@
+T OWARDS C OLD -S TART D RAFTING AND C ONTINUAL
+R EFINING : A V ALUE -D RIVEN M EMORY A PPROACH WITH
+A PPLICATION TO NPU K ERNEL S YNTHESIS
+Yujie Zheng*, 1 , Zhuo Li*, 1, Shengtao Zhang1 , Hanjing Wang2 , Junjie Sheng3, Jiaqian Wang1 ,
+Junchi Yan1 , Weinan Zhang1 , Ying Wen1 , Bo Tang4 , Muning Wen†, 1
+1
+ Shanghai Jiao Tong University 2 Shanghai Artificial Intelligence Laboratory
+3
+Independent Researcher 4 MemTensor (Shanghai) Technology Co., Ltd
+A BSTRACT
+Deploying Large Language Models to data-scarce programming domains poses significant
+challenges, particularly for kernel synthesis on emerging Domain-Specific Architectures where
+a “Data Wall” limits available training data. While models excel on data-rich platforms like
+CUDA, they suffer catastrophic performance drops on data-scarce ecosystems such as NPU
+programming. To overcome this cold-start barrier without expensive fine-tuning, we introduce
+EvoKernel, a self-evolving agentic framework that automates the lifecycle of kernel synthesis
+from initial drafting to continual refining. EvoKernel addresses this by formulating the syn-
+thesis process as a memory-based reinforcement learning task. Through a novel value-driven
+retrieval mechanism, it learns stage-specific Q-values that prioritize experiences based on their
+contribution to the current objective—whether bootstrapping a feasible draft or iteratively
+refining latency. Furthermore, by enabling cross-task memory sharing, the agent generalizes
+insights from simple to complex operators. By building an NPU variant of KernelBench and
+evaluating on it, EvoKernel improves frontier models’ correctness from 11.0% to 83.0% and
+achieves a median speedup of 3.60× over initial drafts through iterative refinement. This
+demonstrates that value-guided experience accumulation allows general-purpose models to
+master the kernel synthesis task on niche hardware ecosystems. Our official page is available at
+https://evokernel.zhuo.li.
+1
+ I NTRODUCTION
+A practical limitation when deploying Large Language Models (LLMs) to niche domains is their inability to
+generalize beyond their pre-training distribution (Minaee et al., 2024; Wang et al., 2025). When faced with
+cold-start scenarios, domains where training data is sparse and expert demonstrations are unavailable, even
+frontier models struggle significantly (Kostikova et al., 2025; Joel et al., 2024). This challenge is particularly
+acute in domains where (i) correctness is binary and machine-verifiable, leaving little room for “partially correct”
+solutions (Jain et al., 2024; Yan et al., 2024), (ii) expert knowledge is scarce and expensive to acquire, and (iii) the
+gap between in-distribution and out-of-distribution performance is stark.
+Automated kernel synthesis for emerging hardware accelerators exemplifies this extreme scarcity (Yu et al.,
+2026). While the industry is aggressively diversifying toward Domain-Specific Architectures (DSAs) like NPUs,
+TPUs, and neuromorphic chips (Silvano et al., 2025; Liao et al., 2021; Jouppi et al., 2023) to address escalating
+computational costs (Kaplan et al., 2020), these nascent ecosystems face a severe “Data Wall”. Unlike the
+mature NVIDIA landscape, where decades of CUDA repositories provide a massive pre-training corpus, emerging
+platforms are characterized by extreme data scarcity: public code is rare, documentation is esoteric, and compiler
+* Equal contribution.
+†
+Corresponding author: Muning Wen (muningwen@sjtu.edu.cn)
+1
+Table 1: Few-shot functional correctness (pass@4) of frontier LLMs on CUDA vs. Ascend C kernel generation.
+Results are from our experiments; the level definitions (L1, L2) and setup details are consistent with Section 4.1.
+Model
+ Level
+ CUDA (%)
+ Ascend C (%)
+L1
+ 92.0
+ 14.0
+GPT-5.2
+L2
+ 90.0
+ 2.0
+L1
+ 50.0
+ 8.0
+DeepSeek-V3.2
+L2
+ 9.0
+ 0.0
+L1
+ 46.0
+ 7.0
+Qwen3-Coder-30B
+L2
+ 10.0
+ 0.0
+feedback is opaque (Joel et al., 2024). This barrier is compounded by the fact that highly optimized CUDA
+kernels (Choquette et al., 2021; Wu, 2023) are not portable to these architectures due to fundamental differences
+in memory hierarchy and instruction sets, leaving foundation models with virtually no expert demonstrations to
+bridge the cold-start gap.
+As evidenced in Table 1, state-of-the-art LLMs that achieve high performance on CUDA (Ouyang et al., 2025)
+suffer a catastrophic collapse when transferred to a data-scarce Domain-Specific Language (DSL) like Ascend
+C, which is specifically designed for NPU kernel programming. In line with prior findings (Wen et al., 2025),
+even GPT-5.2, which attains 92% on CUDA L1 tasks, drops to 14% on Ascend C; on the more challenging L2
+tasks, models fail entirely. This observation suggests that current models do not genuinely “learn” to program new
+hardware like NPUs, but instead rely on memorized patterns from pre-training distributions.
+Standard paradigms to bridge this gap prove insufficient in such data-scarce domains. Supervised Fine-Tuning
+(SFT) (Zhou et al., 2023; Chung et al., 2024) demands thousands of expert-labeled examples per domain (Longpre
+et al., 2023), which is prohibitively expensive when targeting rapidly evolving or niche environments like NPU
+programming. Parametric policy-based Reinforcement Learning (Zhang et al., 2025; Kakade, 2003) requires
+extensive online rollouts to update model weights, incurring high sample complexity (Cao et al., 2024; Qi et al.,
+2025) and risking catastrophic forgetting of general capabilities. Traditional Retrieval-Augmented Generation
+(RAG) (Lewis et al., 2020) falters when the database is sparse (Contal & McGoldrick, 2024; Barnett et al., 2024);
+even with relevant samples, similarity-based retrieval does not guarantee effectiveness (Izacard et al., 2023).
+Consequently, the core challenge is a cold-start problem: How can an agent autonomously master a rigorous,
+data-scarce kernel synthesis task from scratch, without expert demonstrations or expensive fine-tuning?
+To address this, we introduce EvoKernel, a framework that formulates kernel synthesis as a reinforcement
+learning task over a self-evolving memory. By employing a novel value-driven retrieval mechanism, the agent
+learns stage-specific Q-values to quantify the utility of historical experiences, dynamically shifting focus from
+bootstrapping functional correctness (Drafting) to optimizing latency (Refining) without updating model weights.
+Empirically, EvoKernel bridges the cold-start gap on NPU benchmarks, boosting the correctness of frontier models
+from 11.0% to 83.0% and achieving a 3.60x median speedup over the first feasible draft, thereby demonstrating
+that value-guided experience accumulation enables general-purpose models to master data-scarce hardware
+ecosystems.
+Our contributions are summarized as follows:
+• Unified Drafting-Refining Pipeline: We propose a two-stage framework over a shared memory that transitions
+from feasibility-driven drafting to latency-driven refining to bootstrap and optimize NPU kernels.
+• Evolving Value-Driven Retrieval: We introduce a retrieval mechanism that learns stage-specific Q-values
+to quantify memory utility. A unified Monte-Carlo update adapts the policy from verifier feedback without
+updating model weights.
+• Comprehensive Evaluation and Insights: EvoKernel boosts performance on NPU benchmarks from 11.0%
+to 83.0%. We provide in-depth analysis of cross-task transfer, emergent curricula, and scaling to out-of-
+2
+distribution workloads such as the Attention Set and recent MHC kernels, demonstrating how memory
+autonomously bridges the data-scarce gap.
+2
+ R ELATED W ORK
+Self-Evolving and Adaptive Agents. While Large Language Models (LLMs) are typically static, recent research
+explores mechanisms for self-improvement. Inference-time techniques, such as Self-Refine (Madaan et al., 2023)
+and Tree-of-Thoughts (Yao et al., 2023), utilize iterative critique loops to enhance reasoning within a single episode,
+though these improvements are transient, resetting once the context window closes (Shinn et al., 2023). Closest to
+our work are evolutionary frameworks like AlphaEvolve (Novikov et al., 2025) and EvolveR (Wu et al., 2025),
+which accumulate experience across episodes. These methods typically assume sufficient initial competency
+or verifiable intermediate states, conditions absent in the rigid “all-or-nothing” compilation environment of
+data-scarce kernel synthesis, where our approach operates.
+Memory-Augmented Generation. To overcome context limitations, systems like MemGPT (Packer et al., 2023)
+and MemOS (Li et al., 2025c; Chhikara et al., 2025) introduce operating-system-like memory hierarchies for
+long-horizon tasks. In agentic workflows, Voyager (Wang et al., 2023) and other generative agents (Park et al.,
+2023; Fang et al., 2025) demonstrate the power of retrieving procedural skills or behavioral reflections (Madaan
+et al., 2022). More recently, Memento (Zhou et al., 2025) and MemRL (Zhang et al., 2026) have formalized
+retrieval as a reinforcement learning problem, learning what to retrieve. We adapt this value-based retrieval
+paradigm to kernel engineering, where surface-level semantic similarity often fails.
+Automated Kernel Synthesis. Kernel synthesis demands strict functional correctness and hardware-specific
+optimization. Benchmarks like KernelBench (Ouyang et al., 2025) and MultiKernelBench (Wen et al., 2025)
+reveal that general-purpose LLMs degrade sharply on unfamiliar backends due to domain shifts (Li et al., 2025a).
+To mitigate this, recent agentic frameworks such as QiMeng-Kernel (Zhu et al., 2025) and KernelBand (Ran et al.,
+2025) utilize iterative execution feedback for refinement, as do multi-agent systems like STARK (Dong et al.,
+2025) and AKG Kernel Agent (Du et al., 2025). Supervised approaches like Kevin (Baronio et al., 2025) and
+AutoTriton (Li et al., 2025b; Woo et al., 2025) fine-tune models on domain-specific corpora. These methods
+often assume access to high-quality training data, limiting their applicability in emerging ecosystems. EvoKernel
+addresses this cold-start setting by learning to retrieve from a self-evolving memory bank rather than relying on
+static corpora.
+3
+ E VO K ERNEL: V ALUE -D RIVEN M EMORY U PDATE FOR K ERNEL E VOLUTION
+As shown in Figure 1, we propose the EvoKernel, a framework that automates the lifecycle of hardware-specific
+kernel synthesis, from cold-start drafting to continual performance refinement. In this paper, we instantiate the
+framework primarily on Ascend C, while the same agent loop can be specialized to other backends through
+backend-specific prompts, verifier toolchains, and profiling signals. We formulate this process as a Memory-based
+Markov Decision Process (M-MDP) (Zhou et al., 2025; Zhang et al., 2026), where an agent learns to retrieve
+high-utility experiences to guide a LLM generator.
+3.1
+ P ROBLEM FORMULATION
+A kernel synthesis task x ∈ X is specified by a PyTorch reference operator and metadata (e.g., input shapes and
+operator hyperparameters). Given a task x and retrieved context c, a generator Gθ samples a kernel and the goal is
+to generate a kernel source code y ∈ Y that satisfies functional correctness and minimizes execution latency.
+We model the generation process as an M-MDP over a horizon T .A trajectory is defined as τ
+(s0 , c0 , a0 , r0 , . . . , sT ), governed by the tuple (S, A, M, P, R). The components are defined as follows:
+=
+State Space (S): A state st is defined as a tuple (x, ξt ), where x ∈ X denotes the static kernel task (PyTorch
+operator + metadata), and ξt represents the dynamic generation state (e.g., current best-so-far latency or verification
+status).
+3
+Task Batch 𝓧
+Cold-Start Drafting
+Top-k
+ Retrieved by Q
+Compose to Build Context
+Attempts from Other Tasks
+Experiences from the
+Same Task or Other Tasks
+APIs
+Context ct
+Drafted Code
+Retrieved by Q
+Q
+Q
+Q
+Q
+Value Driven Memory
+Success & Failure Experiences
+AscendC API Templates
+Generation traces
+Best Practices
+Value Iteration: 𝑸 = 𝑸 + 𝜶 𝒓 − 𝑸
+Retrieved items · Code · Verified Results · Rewards
+Reward
++1
+ -1
+ Latency vs. Best
+Verifier
+Anti-Hacking
+ Compilation
+ Correctness
+ Performance
+Environment
+Continual Refining
+From Generation Traces, Historical Attempts on
+the Same Task 𝑥:
+0.67
+1.03
+ -0.04
+ … -0.04
+ 𝓟(𝒙)
+Compose to Build Context
+Attempts from Other Tasks
+ 1.03
+ 𝓅
+Best practices
+Experiences
+Child nodes are observable
+Feasible Attempt
+Refined Code
+Failed Attempt
+Figure 1: The EvoKernel framework. (Left) Cold-Start Drafting: Given task batch X , retrieves top-k candidates,
+filters context via Q, and synthesizes an initial kernel. (Center) Environment & Memory: A multi-gate verifier
+assesses generated code to yield rewards, which update Q via value iteration; code and results are stored in Memory.
+(Right) Continual Refining: Exploits generation traces P(x) and historical attempts, including observable child
+nodes, to iteratively optimize for lower latency.
+Action Space (A): The action at ∈ A corresponds to a generated kernel code y ∈ Y.
+Memory (M): We define Mt as a dynamic, self-evolving memory bank. It is initialized as M0 comprising seed
+knowledge. At each step t, it accumulates the agent’s interaction history, updating according to the rule:
+Mt+1 ← Mt ∪ {(st, at , rt )},
+ (1)
+Transition Dynamics (P): The transition dynamics P : S × A → ∆(S) describe the evolution of the generation
+process. Since task x remains invariant within an episode, P deterministically updates the generation state:
+st+1 = (x, ξt+1),
+ ξt+1 = f (x, ξt , at , ot ),
+ (2)
+Here, f updates the dynamic generation state by integrating the action at and its verifier outcome ot, conditioned
+on the task x and the previous state ξt .
+Reward Function (R): The environment provides a scalar feedback signal rt ∈ R based on evaluation of the
+action at .
+Policy Factorization. To tackle this M-MDP, the agent operates via a composite policy. At each step t, a Retrieval
+Policy µ first selects a context ct ⊂ Mt based on the current state. Conditioned on this context, the Generator
+Policy Gθ samples the code:
+π(yt |st, Mt ) = Gθ (at |st, ct ) · µ(ct |st , Mt ),
+ (3)
+Our core methodology focuses on optimizing µ via reinforcement learning to identify high-utility memory items,
+while Gθ leverages the pre-trained capabilities of the LLM.
+3.2
+ M EMORY ARCHITECTURE AND V ALUE -D RIVEN R ETRIEVAL
+The efficacy of the generator Gθ depends critically on the quality of the context ct. We design M as a heteroge-
+neous knowledge base containing: (i) API templates for the active backend when such documentation is available
+(e.g., Ascend C), (ii) summarized success and failure experiences, (iii) generation traces, including both draft and
+refined variants, and (iv) best practices for kernel refinement.
+To instantiate the policy µ, we introduce Value-Driven Retrieval. Unlike traditional similarity-based retrieval,
+our approach dynamically evaluates memory item utility based on the current generation stage. For state s and
+candidate memory item m, we define a Q-value function Qk (s, m) that estimates the expected benefit of including
+m in the context at stage k.
+4
+For a given task x, let N denote the final retrieval count. We first use dense retrieval to obtain a top-K candidate
+pool C(x) ⊂ M, where K = λN and λ is an over-retrieval multiplier. We then use stage-specific value estimates
+Qk to filter these top-K candidates down to the final N items for the context. These values reflect the agent’s
+evolving objectives:
+• Drafting Stage (Q1 ): Estimates the likelihood that m contributes to a functionally correct kernel.
+• Refining Stage (Q2 ): Estimates the contribution of a memory item m to latency optimization of the kernel,
+where m can either be an optimization start point p or auxiliary refinement items from M.
+In the upgraded system, the drafting context is assembled by a hybrid retrieval policy: experiential memories
+and code traces remain value-selected, while API knowledge is retrieved through a backend-aware mixture of
+static infrastructure bundles, exact-name lookup from retrieved code examples, and semantic/category-based
+search. This separation is important in practice because API utility is largely determined by backend coverage and
+operator decomposition, whereas experiential memories benefit directly from online value estimation.
+Unified Value Update. Despite the distinct objectives, we employ a unified Monte-Carlo (MC) update rule to
+refine the retrieval policy µ. Upon observing a reward rt (defined in subsequent sections) after using context items
+ct, we update the Q-values for all m ∈ ct:
+Q(s, m) ← Q(s, m) + α · r − Q(s, m)
+,
+ (4)
+where α is the step size. This update rule allows the retrieval policy µ to continuously adapt to the evolving
+capabilities of Gθ . We provide formal guarantees on boundedness and convergence of these value estimates in
+Appendix A.
+3.3
+ S TAGE 1: COLD -S TART D RAFTING
+The objective of this stage is to obtain an initial feasible kernel that can bootstrap subsequent refinement. For a
+task x, we iteratively (i) retrieve a drafting context ct ⊂ C(x) using an ϵ-greedy policy over Q1 , and (ii) sample a
+candidate kernel yt ∼ Gθ (· | x, ct).
+Reward and update. We use a binary feasibility reward
+(
++1, if gfeas (ot ) = 1,
+r1,t =
+−1, otherwise,
+(5)
+where ot = V (x, yt ) and gfeas is the combined feasibility gate (Section 3.5). After receiving feedback, we update
+the values of retrieved entries m ∈ ct using Eq. 4 with r = r1,t and store the generated code together with verifier
+feedback into memory. This process repeats until a feasible kernel is found or the budget is exhausted.
+3.4
+ S TAGE 2: CONTINUAL R EFINING
+Once a feasible kernel is obtained, the focus shifts from feasibility to latency reduction. We maintain a set of
+optimization start points P(x), initialized with the successful draft from Stage 1 and augmented online as new
+feasible variants are discovered. At each iteration, based on the current state st , we retrieve the available start
+points from the memory M and select a start point using Q2 .
+With the selected start point and the current state, we then retrieve additional contextual information that contains
+optimization traces, best practices, and information about its observable child nodes to support the refinement
+process. In the upgraded system, this refinement context is further conditioned on profiler-derived bottleneck
+diagnoses, which are used to retrieve bottleneck-matched optimization examples and complementary high-
+performing variants. Using the selected start point and the retrieved context in ct, the generator samples a refined
+result.
+Relative reward, normalization, and update. To drive performance optimization, we define reward relative to
+the best-so-far latency bt tracked in ξt:
+(
+−1,
+ if gfeas (ot ) = 0,
+r2,t =
+ (6)
+tanh(log bt − log ℓlat(ot )) , otherwise.
+5
+Table 2: Compilation Rate (CR) and Correctness (Acc) across difficulty levels, shown as (Round 1) Final,
+respectively representing the start point and the final performance. Notably, the huge gap between GPT-5.2 and
+other models implies that frontier LLMs with stronger in-context learning capability benefit substantially more
+from experience-driven methods.
+Level 1
+ Level 2
+ Overall
+Model
+ Method
+CR (%)
+ Acc (%)
+ CR (%)
+ Acc (%)
+ CR (%)
+ Acc (%)
+Pass@k
+ (22.0) 30.0
+ (7.0) 8.0
+ (0.0) 2.0
+ (0.0) 0.0 (11.0) 16.0
+ (3.5) 4.0
+Qwen3-Coder-30B Refinement (13.0) 22.0
+ (2.0) 6.0
+ (0.0) 1.0
+ (0.0) 0.0
+ (6.5) 11.5
+ (1.0) 3.0
+Ours
+ (25.0) 33.0
+ (6.0) 11.0
+ (1.0) 3.0
+ (0.0) 0.0 (13.0) 18.0
+ (3.0) 5.5
+Pass@k
+ (21.0) 33.0
+ (7.0) 9.0
+ (1.0) 13.0
+ (0.0) 0.0 (11.0) 23.0
+ (3.5) 4.5
+DeepSeek-V3.2
+ Refinement (16.0) 44.0
+ (0.0) 12.0
+ (2.0) 26.0
+ (0.0) 0.0
+ (9.0) 35.0
+ (0.0) 6.0
+Ours
+ (9.0) 39.0
+ (2.0) 19.0
+ (1.0) 19.0
+ (0.0) 0.0
+ (5.0) 29.0
+ (1.0) 9.5
+Pass@k
+ (24.0) 36.0
+ (9.0) 19.0
+ (2.0) 13.0
+ (1.0) 3.0 (13.0) 24.5 (5.0) 11.0
+Refinement (19.0) 88.0
+ (7.0) 41.0
+ (2.0) 55.0
+ (1.0) 3.0 (10.5) 71.5 (4.0) 22.0
+GPT-5.2
+Codex
+ (34.0) 82.0 (16.0) 70.0 (16.0) 84.0 (0.0) 22.0 (25.0) 83.0 (8.0) 46.0
+Ours
+ (20.0) 97.0
+ (7.0) 90.0 (2.0) 100.0 (1.0) 76.0 (11.0) 98.5 (4.0) 83.0
+We apply PopArt-style online normalization r̂2,t = (r2,t − µ2 )/σ2 using running estimates (µ2, σ2). We update
+Q2 for both the start point pt and retrieved entities z ∈ ct using Eq. 4 with r = r̂2,t. When a refined kernel is
+feasible, as indicated by gfeas (ot ) = 1, we store the kernel together with verifier feedback in memory for future
+retrieval and add it to the start set P(x) to expand the refinement search space.
+3.5
+ M ULTI - GATE VERIFICATION
+The verifier V acts as the environment interface, providing robust feedback to guide the RL process. Given a task
+x and a generated kernel yt, it returns a structured outcome
+ot = V (x, yt) = (ghack , gcomp , gcorr, ℓlat),
+ (7)
+where ghack , gcomp , gcorr ∈ {0, 1} denote the anti-hacking, compilation, and correctness gates, and ℓlat ∈ R+ is the
+measured latency. A kernel is deemed feasible if and only if: gfeas (ot) ≜ ghack ∧ gcomp ∧ gcorr .
+Anti-hacking (ghack ). We implement a two-tier screening process. A rule-based filter first rejects trivial exploits
+(e.g., using high-level torch APIs or constant-folding shortcuts). Survivors undergo a model-based inspection to
+identify subtle harness manipulations.
+Compilation (gcomp) & Correctness (gcorr ). We verify successful compilation under the backend-specific
+toolchain, instantiated in our main study with the Ascend C toolchain. Correctness is validated by comparing
+outputs against the PyTorch reference: ∥outy (x) − ref(x)∥ ≤ τ . The verifier provides fine-grained feedback,
+including mismatch localization and shape errors (details in Appendix F).
+Latency (ℓlat ). For feasible kernels, we measure on-device execution time using backend-native profiling tools. In
+the primary Ascend setting, we use msprof and report the mean wall time across 3 profiling passes (Pipe, Memory,
+Resource) after warm-up. In extended experiments on CUDA, the same loop is instantiated with GPU-native
+profiling signals.
+6
+4
+ E XPERIMENT
+4.1
+ E XPERIMENTAL S ETUP
+Benchmark and Execution. We evaluate on L1 and L2 operators from KernelBench (Ouyang et al., 2025).
+Since KernelBench does not natively support Ascend C, we implement a compilation, deployment, and execution
+pipeline that maintains full compatibility with KernelBench PyTorch references while enabling the model to
+generate complete Ascend operator projects.
+Budget and metric. We enforce a strict per-operator budget of T = 30 iterations across all methods, encompassing
+both draft generation and iterative refinement. Functional correctness is verified with tolerances of atol =
+rtol = 10−2. Our evaluation relies on three primary metrics: (i) Compilation Rate (CR), which measures
+the proportion of generated kernels that successfully compile, and (ii) Correctness (Acc), which reports the
+percentage of operators for which a functionally valid solution is found within the budget.(iii) Speedup measures
+the reduction in execution latency, defined as speedup = Lref /Lopt , where Lref and Lopt are the latencies of the
+reference and optimized kernels, respectively.
+Baselines. We compare EvoKernel against three baseline strategies using three models: Qwen3-Coder-30B-A3B-
+Instruct (Yang et al., 2025), DeepSeek-V3.2 (Liu et al., 2025), and GPT-5.2. Detailed configurations of these
+baselines can be found in Appendix D.
+• Pass@k: A stateless baseline generating K = 30 independent candidates per operator given a single
+demonstration.
+• Refinement: A stateful agentic loop that iteratively repairs compilation and correctness errors using verifier
+feedback. Upon finding a valid kernel, it transitions to hill-climbing for latency optimization, subject to a
+maximum budget of 30 iterations.
+• Codex by OpenAI: An autonomous agent based on GPT-5.2 with direct shell and file system access. It executes
+a “try-fail-evolve” loop, autonomously mutating the implementation based on execution logs until success or a
+budget of 30 verification attempts is exhausted.
+4.2
+ M AIN R ESULTS
+We evaluate EvoKernel under a matched evaluation pipeline, focusing on compilation and correctness, as well as
+performance optimization after correctness.
+Compilation and correctness. Table 2 reports compilation rate (CR) and correctness (Acc) across two difficulty
+levels under a fixed budget T =30.
+EvoKernel achieves the strongest overall performance with GPT-5.2, reaching 98.5% CR and 83.0% Acc,
+substantially outperforming Codex (83.0% CR, 46.0% Acc) and Refinement (71.5% CR, 22.0% Acc). On Level 2,
+EvoKernel attains near-perfect compilation (100%) with 76% correctness. Despite Codex having autonomous
+shell and file system access, EvoKernel surpasses it by 15.5 points in CR and 37.0 points in Acc.
+On weaker backbones, the improvements are more moderate. EvoKernel achieves the highest Acc on both
+Qwen3-Coder-30B (5.5% vs. 4.0%) and DeepSeek-V3.2 (9.5% vs. 6.0%), with DeepSeek-V3.2 reaching 19%
+correctness on Level 1—more than doubling Pass@k. The Refinement baseline attains higher CR on DeepSeek-
+V3.2 (35.0% vs. 29.0%), suggesting that value-driven retrieval prioritizes generation quality over compilation
+attempts. Critically, Level 2 Acc remains at 0% for weaker models even when candidates compile (e.g., 19% CR
+on DeepSeek-V3.2), indicating that harder operators demand stronger generator capacity.
+Examining Round 1 through the final iteration reveals how effectively each method leverages the iterative process.
+On GPT-5.2, EvoKernel improves CR from 11.0% to 98.5% and Acc from 4.0% to 83.0%, representing an order-
+of-magnitude gain. In contrast, weaker models show limited improvement: Qwen3-Coder-30B increases Acc by
++2.5 points, while DeepSeek-V3.2 improves by +8.5 points. This disparity reveals a key insight: the in-context
+learning capabilities of frontier LLMs prove critical for experience-driven approaches like ours. Crucially, it
+7
+does not weaken our method’s value; instead, it confirms that our agent is keeping pace with the cutting-edge
+advancements of base models.
+Correctness by Category (iter=30)
+ Speedup vs First Correct (iter=30)
+1.0
+(1)
+ 53_Min_reduction_over_a_dimension
+ (2) 54_conv_standard_3D__square_input__square_kernel
+250
+ Iter=26
+ Iter=29
+0.8
+ 10 4
+s
+ 103
+m)
+e
+t a R t s e b 200
+0.6
+s /s e n t c 102
+ 60×
+ 13×
+et c r 10
+ 20
+ 30
+ 5
+ 10
+ 15
+ 20
+ 25
+ 30
+e r r 0.4
+ r o c 150
+ (3) 83_Conv3d_GroupNorm_Min_Clamp_Dropout (4) 82_conv_depthwise_2D_square_input_square_kernel
+o - t s 800
+ Iter=30
+C r i Iter=30
+f( 104
+ 600
+0.2
+ p u d 100
+ s
+ me 400
+ep S 1
+200
+0.0
+ 13×
+ 8×
+Activation
+ Convolution
+ Fuse
+ Loss
+ Matmul
+ Normalization
+ Pooling
+ 50
+ 2
+ 10
+ 20
+ 30
+ 10
+ 15
+ 20
+ 25
+ 30
+Category
+ 3
+ 4
+ Iter
+ Iter
+1.0× speedup
+ 0.5-0.8× speedup
+0.8-1.0× speedup
+ 0.0-0.5× speedup
+ 0
+ Operators (n=159)
+Figure 2: Optimization outcomes. (Left) Category-level correctness and speedup distribution at budget T =30;
+color segments show the fraction of correct kernels in each speedup tier relative to Torch-NPU. (Right) Within-
+operator speedup achieved by iterative refinement across 159 operators with ≥1 valid optimization candidate
+beyond the initial correct draft; inset panels detail representative optimization trajectories.
+Optimization gains: within-operator speedup. Conditioned on reaching a correct draft, the refining stage
+further reduces latency. For each solved operator, we compare the initial draft, defined as the first feasible
+candidate, to the best candidate found within the remaining budget. This yields a median speedup of 3.60×,
+with an interquartile range of 1.38–10.05×. Although many operators remain slower than Torch-NPU (Figure 2),
+consistent within-operator gains indicate that the refinement process continues to improve performance beyond
+correctness.
+Figure 2 quantifies these gains across 159 operators with at least one valid optimization candidate beyond the initial
+correct draft. The distribution is long-tailed: while many operators exhibit modest improvements (s ≈ 1–2×), a
+substantial subset benefits dramatically from continued optimization, with top performers achieving more than
+200× speedup over their first correct version.
+Inset trajectories for four representative operators confirm that these gains emerge from systematic, incremental
+improvements across multiple iterations, rather than from single fortuitous generations.
+4.3
+ G ENERALIZATION OF V ALUE -D RIVEN MEMORY
+A core motivation for our memory design is reusability: high-utility past experiences should accelerate learning on
+subsequent ones. We verify this hypothesis by evaluating transfer across difficulty levels and generator backbones.
+Level Mixing Strategy (L2 Operators)
+ Memory Transfer (50 Operators)
+1.0
+(a) Correctness Rate
+ (b) Compilation Rate
+100
+ 100
+e
+ t a 0.8
+ 84%
+R 80%
+s 80
+ 80
+se n 64.0%
+ )
+ )
+t c 0.6
+ % %e ( 58%
+ (r r 53.0%
+ s 60
+ n 60
+o s oe iC n tate v 0.4
+ c e r l i pi t r 40
+ m 40
+a 34.0%
+ o 32%
+ ol u C C 26%
+mu C 0.2
+ 20
+ 20
+ 14%
+6%
+ 4%
+0
+ 0
+0.0
+2
+ 4
+ 6
+ 8
+ 10
+ 12
+ 14
+ 16
+ 18
+ 20
+ DeepSeek-V3.2
+ Qwen3-Coder
+ DeepSeek-V3.2
+ Qwen3-Coder
+Iteration
+L2 Scratch
+ L1+L2 Mixed
+ L1 L2
+ w/o mem.
+ w/ mem.
+Figure 3: Transfer and generalization. (Left) Transfer across difficulty levels: cumulative success rate on L2 under
+different stream compositions. (Right) Transfer across generator backbones: performance on held-out operators
+when reusing memory built with GPT-5.2.
+8
+Transfer across difficulty levels. We study whether memory accumulated on easier L1 operators transfers to
+harder L2 operators. We consider three setups:
+• L2 Scratch: agent iterates from scratch on L2 operators.
+• L1+L2 Mixed: the agent iterates from scratch on a mixed operator set containing both L1 and L2.
+• L1 → L2: the agent first iterates on L1, then continues iterating on the L2 operator set initialized with the
+resulting L1 memory.
+In Figure 3 and Table 3, the L1 → L2 stream exhibits the fastest warm-up and highest final performance. By
+iteration t = 17, it achieves 64% L2 correctness, outperforming L1+L2 Mixed (53%) by 11% and L2 Scratch
+(34%) by 30%. Crucially, the transfer allows the agent to solve its first L2 operator four iterations earlier than
+the scratch baseline. This confirms that foundational patterns learned from simpler tasks effectively bootstrap
+progress on harder problems.
+Table 3: Cross-level transfer summary on L2 at final iteration.
+Setup
+ CR (%)
+ Acc (%)
+L2 Scratch
+ 88.0
+ 34.0
+L1+L2 Mixed
+ 98.0
+ 53.0
+L1→L2
+ 97.0
+ 64.0
+Transfer across generator backbones. We further assess whether memory constructed by a strong model
+(GPT-5.2) can improve the performance of weaker backbones (DeepSeek-V3.2, Qwen3-Coder-30B). We evaluate
+on a held-out set of 50 operators (30 L1, 20 L2), initializing the agent with a filtered GPT-5.2 memory bank where
+traces from the test operators are excluded to prevent leakage.
+Figure 3 (right) shows that the learned memory transfers well across generator backbones. For DeepSeek, adding
+memory improves compilation from 26% to 80% and correctness from 6% to 58%. For Qwen, memory yields a
+similarly large compilation gain (14%→84%) with a smaller but substantial correctness gain (4%→32%).
+Overall, memory appears to provide backbone-agnostic operator constraints and debugging cues that greatly
+reduce non-compiling attempts, while the remaining compilation–correctness gap (especially for Qwen) suggests
+semantic validity remains the dominant bottleneck.
+4.4
+ B EYOND KERNELB ENCH AND CANN
+The main benchmark in this paper is Ascend C KernelBench, but an important question is whether the learned
+memory and refinement policy continue to help on workloads that fall outside this training distribution. To test
+this, we evaluate EvoKernel on the Attention Set operator suites and on mHC kernels (Xie et al., 2025) derived
+from recent DeepSeek architectures.
+Table 4: Initial scaling-out results beyond the main KernelBench study.
+Workload
+ Platform
+ # Ops
+ CR (%)
+ Acc (%)
+ Fast1 Ratio (%)
+Attention Set
+ CUDA
+ 70
+ 100.0
+ 97.1
+ 72.1
+Attention Set
+ Ascend
+ 70
+ 100.0
+ 78.6
+ 21.8
+KernelBench
+ CUDA
+ 250
+ 100.0
+ 100.0
+ 68.0
+mHC Kernels (DeepSeek)
+ Ascend
+ 15
+ 86.7
+ 66.7
+ 60.0
+Attention Set operators. On CUDA, EvoKernel scales cleanly from the KernelBench-style setting to the Attention
+Set workloads. On the 70-operator Attention Set (excluding non-attention operators such as GEMM, RoPE, and
+Router), the system reaches 100% compilation and 97.1% correctness after 30 outer iterations. On the same
+9
+Attention Set on CUDA with KernelBench operators included, EvoKernel achieves 100% compilation and 100%
+correctness on all 250 operators. These results indicate that the memory mechanism transfers beyond the operator
+families emphasized in the main benchmark and remains effective on more application-driven kernels. Figure 7
+shows the optimization timeline and performance comparison for the CUDA Attention Set.
+Ascend Attention Set and DeepSeek mHC kernels. More importantly for the cold-start setting emphasized in this
+paper, the same methodology also transfers to new Ascend C workloads outside the original KernelBench distribu-
+tion. On the 70-operator Ascend Attention Set, EvoKernel reaches 100.0% compilation and 78.6% correctness after
+30 iterations. We further evaluate on 15 mHC kernels targeting a recent DeepSeek architectural motif on Ascend
+(CANN 8.5.0). EvoKernel obtains 10 correct implementations, and 6 of these outperform the PyTorch baseline.
+Representative wins include SinkhornKnopp with 41.96× speedup, OrthostochasticProject with
+2.94×, and MhcPostBlock with 2.88×. Figure 4 shows the optimization timeline and per-operator performance
+for all 15 mHC kernels over 30 iterations (merged across three experiment series).
+Best Correct Run vs PyTorch Baseline (mHC Kernels (Ascend))
+Equivalent Speedup (Baseline / Agent)
+mHC Kernels (Ascend) Correctness & Performance Optimization Timeline
+ 0.00x
+ 0.02x
+ 0.06x
+ 0.25x
+ 1.00x
+ 4.00x
+ 16.00x
+ 64.00x
+0.674
+ 0.06
+ 0.04
+ 0.034
+ 0.027
+01_SinkhornKnopp
+01_SinkhornKnopp
+ 41.96x
+0.185
+ 0.059
+ 0.042
+ 0.037
+05_StreamWrite
+02_MhcProjector
+ 0.36x
+0.688
+ 0.267
+ 0.062
+ 0.028
+04_StreamMix
+03_StreamWeightedSum
+ 2.67x
+35.19
+ 0.714
+ 0.309
+ 0.25
+ 0.072
+ 0.049
+ 0.04
+06_MhcUpdate
+ 04_StreamMix
+ 1.48x
+0.208
+ 0.152
+ 0.036 0.018
+ 0.015
+03_StreamWeightedSum
+ 05_StreamWrite
+ 0.35x
+2336
+ 29.51
+ 24.5
+ 10.27
+ 0.714
+15_MhcPostBlock
+ 06_MhcUpdate
+ 1.47x
+0.077
+ 0.048
+ 0.041
+ 0.036
+10_OrthostochasticProject
+ 2.94x
+10_OrthostochasticProject
+217.5
+ 75.08
+ 56.7
+ 15.02
+ 9.137
+ 7.099
+12_OptimizedMHCLayerWithFusion
+ 0.06x
+02_MhcProjector
+3567
+ 112.6
+ 0.01x
+14_MhcPreBlock14_MhcPreBlock
+22.34
+ 15_MhcPostBlock
+ 2.88x
+12_OptimizedMHCLayerWithFusion
+1 2 3 4 5 6 7 8 9 101112131415161718192021222324252627282930
+ 6
+ 4
+ 2
+ 0
+ 2
+ 4
+Outer Iteration
+ Relative Performance log (Baseline / Agent)
+First solve
+ Best perf improved
+ Best performance
+ PyTorch Baseline (1.0x)
+Figure 4: mHC Kernels (Ascend): Optimization timeline and performance vs. Torch-NPU baseline for 15
+DeepSeek mHC operators over 30 iterations (merged across three experiment series). (Left) Correctness and
+performance optimization timeline. (Right) Best correct run vs. baseline in log2 speedup.
+Taken together, these scaling-out results suggest that EvoKernel is not simply memorizing KernelBench operator
+templates. Instead, the framework appears able to reuse memory and profiling-guided refinement to adapt to
+both new operator families and new architectural motifs, while still preserving the paper’s primary emphasis on
+data-scarce Ascend C kernel generation.
+4.5
+ A BLATIONS
+4.5.1
+ V ALUE -DRIVEN VERSUS H EURISTIC-D RIVEN R ETRIEVAL
+We assess the impact of learned value estimates by comparing our full value-driven pipeline against a heuristic-
+driven variant. Both settings use the L1 → L2 transfer protocol (Section 4.3) and run for 30 L2 iterations per
+operator, inheriting the same L1 memory. The only difference lies in the selection mechanism:
+• Value-Driven (Ours): Selects context and optimization start points using ϵ-greedy over learned Q-values.
+• Heuristic-Driven: Selects context based solely on semantic similarity and chooses optimization start points
+based on the highest historical performance.
+Figure 5 (left) tracks cumulative correctness and compilation rates. While both methods perform similarly in the
+early stages (reaching 48% correctness by iteration 14), the value-driven approach diverges significantly thereafter.
+10
+By iteration 30, it achieves 77% correctness and 100% compilation, compared to 67% and 97% for the heuristic
+baseline. This indicates that while heuristics suffice for initial bootstrapping, learned value estimates provide a
+crucial exploitation signal for solving the long tail of difficult operators.
+Q Value Ablation (L2 Operators)
+ Top-K Similarity Search Observation (L1 Operators)
+(a) Correctness Rate
+ (b) Compilation Rate
+ 1.0
+ 98.0%
+ 1.0
+Iter=24
+1.0
+ 1.0
+ 100.0%
+a t e
+ Iter=14
+ a t e
+ Iter=5
+ 97.0%
+ t a e
+ R 0.8
+ 84.0%
+ 0.8
+t a e
+ Rs R s 0.8
+ 77.0%
+ n o R 0.8
+ s s e 67.0%
+ o n i te n 67.0%
+ i t a n t c 0.6
+ 0.6
+a l it c e 0.6
+ l i p 0.6
+ e r r p mr or m oo o C CC C e v 0.4
+ 0.4
+e ve v 0.4
+ e v 0.4
+ i t a i t ai lt a t a u ui ll l m mu m 0.2
+ u m 0.2
+ u C 0.2
+ 0.2
+u Cu uC C0.0
+ 0.0
+ 0.0
+ 0.0
+5
+ 10
+ 15
+ 20
+ 25
+ 30
+ 5
+ 10
+ 15
+ 20
+ 25
+ 30
+ 5
+ 10
+ 15
+ 20
+ 25
+Iteration
+ Iteration
+ Iteration
+w/o Q value
+ w/ Q value
+ Correctness
+ Compilation
+Figure 5: Retrieval ablations. (Left) Value-driven vs. heuristic retrieval on L2 operators (same L1 memory and
+ϵ-greedy schedule). (Right) Effect of increasing retrieval pool size K at iteration 24; cumulative correctness and
+compilation rates on L1 operators.
+4.5.2
+ M ULTI -T ASK M EMORY S HARING VERSUS P ER -TASK R EFINEMENT
+To isolate the contribution of cross-task memory sharing, we compare EvoKernel against the Refinement baseline
+under identical per-operator iteration budgets (Table 2). Refinement can be viewed as a degenerate instance of our
+framework: restricting the memory bank to a single operator eliminates cross-task retrieval, reducing the agent to
+iterative self-refinement. This controlled ablation thus directly quantifies the benefit of a global, shared memory
+bank over per-task isolated iteration.
+Results reveal that cross-task sharing yields substantial gains, particularly on Level 2 operators. With GPT-5.2,
+EvoKernel raises the Level 2 compilation rate from 55.0% to 100.0% and accuracy from 3.0% to 76.0%. Level 1
+exhibits more moderate improvements (+9 pp CR, +49 pp Acc). These findings indicate that, although within-
+operator refinement provides a useful signal, the ability to transfer experience across tasks confers additional,
+complementary benefits that isolated iteration cannot achieve.
+4.6
+ D ISCUSSION
+Explicit versus Emergent Curricula. Our results demonstrate that value-driven memory induces adaptive
+curriculum learning without explicit task ordering. When we impose an explicit L1→L2 curriculum (Table 3),
+the agent benefits from a warm start, as L1 memory acts as foundational scaffolding that accelerates early L2
+progress despite the complexity gap. Crucially, however, even under a L1+L2 Mixed setting with no prescribed
+ordering, the retrieval policy autonomously reconstructs a soft curriculum. Figure 6 exemplifies this emergent
+behavior for 36 RMSNorm within the mixed setting: the agent first solves simpler operators, which then serve as
+retrieved references to facilitate the solution of harder ones, naturally forming a dependency chain without manual
+intervention.
+Scaling to out-of-distribution workloads. The additional results in Table 4 strengthen this interpretation.
+The framework transfers not only across difficulty levels within KernelBench, but also to workloads that differ
+materially from the main training distribution: the Attention Set and recent DeepSeek mHC kernels. In particular,
+the Ascend mHC results indicate that the system can reuse accumulated memories to tackle new architectural
+motifs rather than only variants of benchmark operators. The Ascend Attention Set results point in the same
+direction, with 78.6% correctness on 70 operators, suggesting that the agent’s benefit persists even when the
+workload shifts toward application-driven kernels.
+Why value-driven memory outperforms stateless baselines. Pass@k sampling treats each generation indepen-
+dently, forfeiting any cross-attempt learning. Iterative refinement (e.g., Codex) accumulates feedback within a
+single operator but discards it afterward, preventing cross-operator transfer. In contrast, our approach persists and
+11
+Experience Transfer for 36_RMSNorm_
+36_RMSNorm_
+NORMALIZATION
+37_FrobeniusNorm_
+NORMALIZATION
+34_InstanceNorm
+NORMALIZATION
+23_Softmax
+ACTIVATION
+29_Softplus
+ACTIVATION
+22_Tanh
+ACTIVATION
+S1=iter1
+ S2=iter2
+ S3=iter4
+ S4=iter6
+ S5=iter7
+ S6=iter12
+Solved
+ Unsolved
+ Example used
+Figure 6: Experience transfer dependency graph of 36 RMSNorm . Arrows trace causal references at first-solve
+iterations, revealing an emergent curriculum from simple to complex operators.
+values experiences across both attempts and tasks, enabling the agent to bootstrap harder problems from easier
+ones and to amortize debugging effort across the entire operator population.
+Impact of candidate pool size. In our experiments, the candidate pool size |C(x)| is controlled by a multiplier λ
+applied to the final retrieval count N . Smaller candidate pools risk missing valuable context, while larger ones may
+introduce noise and dilute the signal from high-value entries. Initially, we set λ = 2, resulting in a convergence
+point with 67% correctness. Upon increasing λ by a factor of 15, correctness improved sharply to 84% by iteration
+26. This suggests that dynamically expanding the candidate pool during training allows the Q-value policy to
+discover previously overlooked high-utility entries. The optimal multiplier remains an important area for future
+research, as there is likely a sweet spot that balances coverage and efficiency. In our experiments, we observed that
+gradually increasing λ allowed for a controlled replacement of context, ultimately improving model performance.
+5
+ C ONCLUSION AND F UTURE WORK
+We presented EvoKernel, a value-driven memory agent addressing cold-start kernel synthesis by learning stage-
+specific Q-values for retrieval over a self-evolving memory bank. A central insight is that frontier LLMs have
+enhanced in-context learning capabilities, enabling effective generalization from retrieved demonstrations even in
+cold-start kernel synthesis scenarios. This emergent ability makes memory-based, non-parametric approaches
+practically viable. Our additional scaling results on the Attention Set and recent DeepSeek mHC kernels further
+suggest that the learned memory is not confined to the original KernelBench distribution. More broadly, the
+value-driven memory paradigm may benefit other cold-start domains with binary verification signals, and we
+anticipate that as LLMs continue to improve, memory-augmented approaches will enable autonomous mastery of
+an ever-wider range of specialized tasks. Beyond technical gains, these results suggest value-driven memory can
+democratize data-scarce programming expertise (e.g., NPU kernel synthesis), helping bridge expert shortages
+as hardware diversifies and pointing toward AI systems that adapt to new domains with minimal data. Potential
+future work includes extending the framework to other emerging DSLs to verify cross-architecture universality,
+exploring knowledge distillation to reduce reliance on large commercial models, and incorporating denser reward
+signals to improve sample efficiency.
