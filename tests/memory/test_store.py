@@ -1,3 +1,5 @@
+import pytest
+
 from evokernel.domain.enums import Stage
 from evokernel.domain.models import MemoryItem, VerificationOutcome
 from evokernel.memory.state_signature import build_state_signature
@@ -82,6 +84,52 @@ def test_memory_item_serialization_round_trip():
     assert restored.context_summary == "api: include immintrin"
 
 
+def test_memory_item_rejects_inconsistent_feasibility():
+    with pytest.raises(ValueError, match="is_feasible"):
+        MemoryItem(
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void evokernel_entry() {}",
+            summary="compile fix",
+            reward=1.0,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=False,
+                correctness_passed=False,
+                latency_ms=None,
+                error_category="compile_error",
+                feedback_summary="missing include",
+            ),
+        )
+
+
+def test_memory_item_rejects_infeasible_start_point():
+    with pytest.raises(ValueError, match="became_start_point"):
+        MemoryItem(
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void evokernel_entry() {}",
+            summary="compile fix",
+            reward=-1.0,
+            is_feasible=False,
+            became_start_point=True,
+            verifier_outcome=VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=False,
+                correctness_passed=False,
+                latency_ms=None,
+                error_category="compile_error",
+                feedback_summary="missing include",
+            ),
+        )
+
+
 def test_memory_store_jsonl_round_trip(tmp_path):
     store = InMemoryStore()
     item = MemoryItem(
@@ -113,3 +161,51 @@ def test_memory_store_jsonl_round_trip(tmp_path):
     recalled = restored.recall("vector_add")
     assert len(recalled) == 1
     assert recalled[0].summary == "first draft"
+
+
+def test_memory_store_save_jsonl_is_atomic(tmp_path, monkeypatch):
+    store = InMemoryStore()
+    store.add(
+        MemoryItem(
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void evokernel_entry() {}",
+            summary="new data",
+            memory_kind="generation_trace",
+            reward=0.25,
+            is_feasible=False,
+            became_start_point=False,
+            verifier_outcome=VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=False,
+                latency_ms=None,
+                error_category="wrong_answer",
+                feedback_summary="edge cases fail",
+            ),
+        )
+    )
+
+    path = tmp_path / "memory.jsonl"
+    path.write_text("old data\n", encoding="utf-8")
+
+    def fail_replace(self, target):
+        assert self != target
+        assert path.read_text(encoding="utf-8") == "old data\n"
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(type(path), "replace", fail_replace)
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        store.save_jsonl(path)
+
+    assert path.read_text(encoding="utf-8") == "old data\n"
+
+
+def test_q_value_store_rejects_unsupported_stage():
+    store = QValueStore()
+
+    with pytest.raises(ValueError, match="Unsupported stage"):
+        store.get(stage="unsupported", state_signature="state", memory_id="m1")

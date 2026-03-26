@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from evokernel.domain.enums import Stage
 
@@ -63,3 +63,15 @@ class MemoryItem(BaseModel):
     became_start_point: bool
     verifier_outcome: VerificationOutcome
     parent_attempt_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_feasibility(self) -> "MemoryItem":
+        if self.is_feasible != self.verifier_outcome.is_feasible:
+            raise ValueError(
+                "is_feasible must match verifier_outcome.is_feasible"
+            )
+        if self.became_start_point and not self.is_feasible:
+            raise ValueError(
+                "became_start_point requires is_feasible=True"
+            )
+        return self

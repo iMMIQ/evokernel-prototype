@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from evokernel.domain.models import MemoryItem
@@ -35,10 +37,22 @@ class InMemoryStore:
     def save_jsonl(self, path: str | Path) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8") as handle:
-            for item in self._items:
-                handle.write(json.dumps(item.model_dump(mode="json")))
-                handle.write("\n")
+        fd, temp_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f"{target.name}.",
+            suffix=".tmp",
+            text=True,
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                for item in self._items:
+                    handle.write(json.dumps(item.model_dump(mode="json")))
+                    handle.write("\n")
+            temp_path.replace(target)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def load_jsonl(cls, path: str | Path) -> "InMemoryStore":

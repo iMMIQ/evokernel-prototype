@@ -28,6 +28,8 @@ class QValueStore:
         return bucket[key]
 
     def _bucket(self, stage: Stage) -> dict[QKey, float]:
-        if stage is Stage.DRAFTING:
+        if stage == Stage.DRAFTING:
             return self.q1
-        return self.q2
+        if stage == Stage.REFINING:
+            return self.q2
+        raise ValueError(f"Unsupported stage: {stage!r}")
