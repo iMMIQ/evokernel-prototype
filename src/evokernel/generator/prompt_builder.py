@@ -4,11 +4,34 @@ from evokernel.generator.base import GenerationRequest
 
 
 PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
+FALLBACK_SYSTEM_PROMPTS = {
+    "drafting": (
+        "You are drafting a candidate EvoKernel implementation.\n\n"
+        "Return code only.\n"
+        "Produce a complete C/C++ kernel candidate that follows the backend "
+        "constraints exactly.\n"
+        "Prefer simple, correct code over speculative optimizations when "
+        "context is incomplete."
+    ),
+    "refining": (
+        "You are refining an existing EvoKernel implementation.\n\n"
+        "Return code only.\n"
+        "Use retrieved context and verifier feedback to correct failures or "
+        "improve the candidate while preserving the task goal.\n"
+        "Keep changes targeted to the reported issues unless the context "
+        "requires a broader fix."
+    ),
+}
 
 
 def load_system_prompt(stage: str) -> str:
     prompt_path = PROMPTS_DIR / f"{stage}_system.md"
-    return prompt_path.read_text(encoding="utf-8").strip()
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8").strip()
+    try:
+        return FALLBACK_SYSTEM_PROMPTS[stage]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported prompt stage: {stage}") from exc
 
 
 def build_generation_prompt(

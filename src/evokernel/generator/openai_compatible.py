@@ -17,7 +17,11 @@ class OpenAICompatibleGenerator:
 
     @classmethod
     def from_config(cls, config: GeneratorConfig) -> "OpenAICompatibleGenerator":
-        api_key = os.environ[config.api_key_env]
+        api_key = os.getenv(config.api_key_env)
+        if not api_key:
+            raise ValueError(
+                f"Missing API key environment variable: {config.api_key_env}"
+            )
         base_url = config.base_url or "https://api.openai.com/v1"
         return cls(model=config.model, base_url=base_url, api_key=api_key)
 
@@ -66,4 +70,7 @@ class OpenAICompatibleGenerator:
                     text = content_item.get("text")
                     if isinstance(text, str):
                         texts.append(text)
-        return "\n".join(texts).strip()
+        code = "\n".join(texts).strip()
+        if not code:
+            raise ValueError("No usable output_text found in provider response")
+        return code
