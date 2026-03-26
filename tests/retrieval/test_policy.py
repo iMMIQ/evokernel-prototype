@@ -110,10 +110,79 @@ def test_recall_candidates_limits_pool_by_lambda_times_n(memory_items):
     recalled = recall_candidates(
         items=memory_items,
         operator_family="elementwise",
+        backend_id="cpu_simd",
+        stage=Stage.DRAFTING,
         final_context_count=2,
         over_retrieval_lambda=3,
     )
     assert len(recalled) == 6
+
+
+def test_recall_candidates_prefers_backend_and_stage_matches_before_reward():
+    outcome = VerificationOutcome(
+        anti_hack_passed=True,
+        compile_passed=True,
+        correctness_passed=True,
+        latency_ms=1.0,
+        error_category=None,
+        feedback_summary="ok",
+    )
+    items = [
+        MemoryItem(
+            memory_id="target-match",
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void target_match();",
+            summary="target-match",
+            reward=0.1,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+        ),
+        MemoryItem(
+            memory_id="wrong-stage",
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.REFINING,
+            code="void wrong_stage();",
+            summary="wrong-stage",
+            reward=0.8,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+        ),
+        MemoryItem(
+            memory_id="wrong-backend",
+            task_id="vector_add",
+            backend_id="cuda",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void wrong_backend();",
+            summary="wrong-backend",
+            reward=0.9,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+        ),
+    ]
+
+    recalled = recall_candidates(
+        items=items,
+        backend_id="cpu_simd",
+        operator_family="elementwise",
+        stage=Stage.DRAFTING,
+        final_context_count=2,
+        over_retrieval_lambda=2,
+    )
+
+    assert [item.summary for item in recalled[:3]] == [
+        "target-match",
+        "wrong-stage",
+        "wrong-backend",
+    ]
 
 
 def test_select_context_items_prefers_high_q_items_when_epsilon_zero(memory_items):
