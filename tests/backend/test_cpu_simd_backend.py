@@ -4,7 +4,11 @@ import numpy as np
 
 from evokernel.backend.cpu_simd import CpuSimdBackend
 from evokernel.backend.toolchain import CompilerSpec, CpuSimdToolchain
-from evokernel.benchmarks.cpu_simd_tasks import build_vector_add_task
+from evokernel.benchmarks.cpu_simd_tasks import (
+    build_layernorm_task,
+    build_matmul_tiled_task,
+    build_vector_add_task,
+)
 from evokernel.benchmarks.models import BenchmarkTask
 
 
@@ -169,3 +173,76 @@ def test_measure_latency_passes_real_case_buffers_into_candidate_entrypoint(
         artifact.last_case_path.read_text(encoding="utf-8")
     )
     assert serialized_case["inputs"]["b"] == [1.0] * 8
+
+
+def test_measure_latency_uses_no_copy_runner_path(tmp_path, monkeypatch):
+    backend = CpuSimdBackend(
+        work_root=tmp_path,
+        toolchain=CpuSimdToolchain(compiler=CompilerSpec(executable="clang++")),
+    )
+    task = build_vector_add_task()
+    case = task.edge_case_inputs[0]
+    artifact = backend.materialize_candidate(
+        task=task,
+        candidate_code='extern "C" void evokernel_entry() {}',
+        attempt_id="attempt-latency-nocopy",
+    )
+
+    calls: list[str] = []
+
+    def fake_build_candidate_runner(callable_obj, task_id, case, materialize_output):
+        calls.append("materialize" if materialize_output else "in_place")
+
+        def run():
+            return np.zeros_like(case["a"])
+
+        return run
+
+    monkeypatch.setattr(backend, "load_callable", lambda _: object())
+    monkeypatch.setattr(
+        backend,
+        "_build_candidate_runner",
+        fake_build_candidate_runner,
+    )
+
+    latency_ms = backend.measure_latency(
+        artifact=artifact,
+        case=case,
+        warmup_runs=1,
+        timed_runs=2,
+    )
+
+    assert latency_ms >= 0.0
+    assert calls == ["in_place"]
+
+
+def test_matmul_task_cases_do_not_allow_returning_lhs():
+    task = build_matmul_tiled_task()
+    case = task.randomized_inputs[0]
+
+    assert not np.allclose(case["a"], task.reference_impl(**case))
+
+
+def test_layernorm_task_cases_require_gamma_and_beta():
+    task = build_layernorm_task()
+    case = task.randomized_inputs[0]
+    reference = task.reference_impl(**case)
+    normalized_only = (
+        (case["x"] - np.mean(case["x"], axis=-1, keepdims=True))
+        / np.sqrt(np.var(case["x"], axis=-1, keepdims=True) + case["eps"])
+    )
+
+    assert not np.allclose(reference, normalized_only)
+
+
+def test_extract_structured_error_prefers_linker_classification():
+    backend = CpuSimdBackend(
+        toolchain=CpuSimdToolchain(compiler=CompilerSpec(executable="clang"))
+    )
+
+    error = backend.extract_structured_error(
+        "ld: undefined reference to evokernel_entry\nclang: error: linker command failed"
+    )
+
+    assert error is not None
+    assert error.category == "link_error"

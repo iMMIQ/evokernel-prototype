@@ -115,6 +115,7 @@ class CpuSimdBackend:
             callable_obj=self.load_callable(artifact),
             task_id=artifact.task.task_id,
             case=case,
+            materialize_output=False,
         )
 
         for _ in range(warmup_runs):
@@ -133,10 +134,10 @@ class CpuSimdBackend:
         if not normalized:
             return None
         lowered = normalized.lower()
-        if "error:" in lowered:
-            category = "compile_error"
-        elif "undefined reference" in lowered:
+        if "undefined reference" in lowered:
             category = "link_error"
+        elif "error:" in lowered:
+            category = "compile_error"
         else:
             category = "runtime_error"
         return StructuredBackendError(category=category, message=normalized)
@@ -157,28 +158,41 @@ class CpuSimdBackend:
             callable_obj=self.load_callable(artifact),
             task_id=artifact.task.task_id,
             case=case,
+            materialize_output=True,
         )
         return runner()
 
     def _build_candidate_runner(
-        self, callable_obj: Any, task_id: str, case: dict[str, Any]
+        self,
+        callable_obj: Any,
+        task_id: str,
+        case: dict[str, Any],
+        materialize_output: bool,
     ) -> Any:
         entrypoint = getattr(callable_obj, "evokernel_entry", None)
         if entrypoint is None:
             raise AttributeError("Compiled artifact does not export evokernel_entry")
 
         if task_id == "vector_add":
-            return self._build_vector_add_runner(entrypoint, case)
+            return self._build_vector_add_runner(
+                entrypoint, case, materialize_output
+            )
         if task_id == "reduce_sum":
-            return self._build_reduce_sum_runner(entrypoint, case)
+            return self._build_reduce_sum_runner(
+                entrypoint, case, materialize_output
+            )
         if task_id == "matmul_tiled":
-            return self._build_matmul_tiled_runner(entrypoint, case)
+            return self._build_matmul_tiled_runner(
+                entrypoint, case, materialize_output
+            )
         if task_id == "layernorm":
-            return self._build_layernorm_runner(entrypoint, case)
+            return self._build_layernorm_runner(
+                entrypoint, case, materialize_output
+            )
         raise NotImplementedError(f"Unsupported CPU SIMD task: {task_id}")
 
     def _build_vector_add_runner(
-        self, entrypoint: Any, case: dict[str, Any]
+        self, entrypoint: Any, case: dict[str, Any], materialize_output: bool
     ) -> Any:
         a = np.ascontiguousarray(case["a"], dtype=np.float32)
         b = np.ascontiguousarray(case["b"], dtype=np.float32)
@@ -194,12 +208,14 @@ class CpuSimdBackend:
 
         def run() -> np.ndarray:
             entrypoint(out, a, b, a.size)
-            return np.array(out, copy=True)
+            if materialize_output:
+                return np.array(out, copy=True)
+            return out
 
         return run
 
     def _build_reduce_sum_runner(
-        self, entrypoint: Any, case: dict[str, Any]
+        self, entrypoint: Any, case: dict[str, Any], materialize_output: bool
     ) -> Any:
         x = np.ascontiguousarray(case["x"], dtype=np.float32)
         out = np.zeros(1, dtype=np.float32)
@@ -214,12 +230,14 @@ class CpuSimdBackend:
         def run() -> np.float32:
             out[0] = 0.0
             entrypoint(out, x, x.size)
-            return np.float32(out[0])
+            if materialize_output:
+                return np.float32(out[0])
+            return out[0]
 
         return run
 
     def _build_matmul_tiled_runner(
-        self, entrypoint: Any, case: dict[str, Any]
+        self, entrypoint: Any, case: dict[str, Any], materialize_output: bool
     ) -> Any:
         a = np.ascontiguousarray(case["a"], dtype=np.float32)
         b = np.ascontiguousarray(case["b"], dtype=np.float32)
@@ -237,12 +255,14 @@ class CpuSimdBackend:
 
         def run() -> np.ndarray:
             entrypoint(out, a, b, a.shape[0], a.shape[1], b.shape[1])
-            return np.array(out, copy=True)
+            if materialize_output:
+                return np.array(out, copy=True)
+            return out
 
         return run
 
     def _build_layernorm_runner(
-        self, entrypoint: Any, case: dict[str, Any]
+        self, entrypoint: Any, case: dict[str, Any], materialize_output: bool
     ) -> Any:
         x = np.ascontiguousarray(case["x"], dtype=np.float32)
         gamma = np.ascontiguousarray(case["gamma"], dtype=np.float32)
@@ -263,7 +283,9 @@ class CpuSimdBackend:
 
         def run() -> np.ndarray:
             entrypoint(out, x, gamma, beta, x.shape[0], x.shape[1], eps)
-            return np.array(out, copy=True)
+            if materialize_output:
+                return np.array(out, copy=True)
+            return out
 
         return run
 

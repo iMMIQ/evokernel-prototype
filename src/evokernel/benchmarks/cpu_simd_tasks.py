@@ -80,13 +80,32 @@ def build_matmul_tiled_task() -> BenchmarkTask:
         randomized_inputs=[
             {
                 "a": np.arange(64, dtype=np.float32).reshape(8, 8),
-                "b": np.eye(8, dtype=np.float32),
+                "b": np.flip(
+                    np.arange(64, dtype=np.float32).reshape(8, 8) / 11.0,
+                    axis=1,
+                ),
             }
         ],
         edge_case_inputs=[
             {
-                "a": np.zeros((4, 4), dtype=np.float32),
-                "b": np.ones((4, 4), dtype=np.float32),
+                "a": np.array(
+                    [
+                        [1.0, 2.0, 0.0, -1.0],
+                        [0.5, -3.0, 4.0, 2.0],
+                        [7.0, 1.5, -2.0, 0.25],
+                        [3.0, 3.0, 3.0, 3.0],
+                    ],
+                    dtype=np.float32,
+                ),
+                "b": np.array(
+                    [
+                        [2.0, 1.0, 0.0, -1.0],
+                        [1.0, 0.0, 1.0, 2.0],
+                        [0.0, -2.0, 3.0, 1.0],
+                        [4.0, 1.0, -1.0, 0.5],
+                    ],
+                    dtype=np.float32,
+                ),
             }
         ],
         tolerances=BenchmarkTolerances(atol=1e-4, rtol=1e-4),
@@ -106,16 +125,25 @@ def build_layernorm_task() -> BenchmarkTask:
         randomized_inputs=[
             {
                 "x": np.arange(24, dtype=np.float32).reshape(3, 8),
-                "gamma": np.ones(8, dtype=np.float32),
-                "beta": np.zeros(8, dtype=np.float32),
+                "gamma": np.array(
+                    [0.5, 1.0, 1.5, -0.5, 2.0, 0.25, -1.0, 0.75],
+                    dtype=np.float32,
+                ),
+                "beta": np.array(
+                    [1.0, -1.0, 0.25, 0.0, 2.0, -0.5, 1.5, -2.0],
+                    dtype=np.float32,
+                ),
                 "eps": 1e-5,
             }
         ],
         edge_case_inputs=[
             {
-                "x": np.ones((2, 4), dtype=np.float32),
-                "gamma": np.ones(4, dtype=np.float32),
-                "beta": np.zeros(4, dtype=np.float32),
+                "x": np.array(
+                    [[1.0, 1.0, 1.0, 1.0], [2.0, 0.0, -2.0, 4.0]],
+                    dtype=np.float32,
+                ),
+                "gamma": np.array([2.0, -1.0, 0.5, 1.5], dtype=np.float32),
+                "beta": np.array([-0.5, 1.0, 0.25, 2.0], dtype=np.float32),
                 "eps": 1e-5,
             }
         ],
