@@ -1,4 +1,7 @@
+import pytest
+
 from evokernel.config import load_runtime_config
+from evokernel.domain.errors import ConfigLoadError
 from evokernel.domain.models import EpisodeState, VerificationOutcome
 
 
@@ -59,3 +62,25 @@ def test_load_runtime_config_reads_backend_benchmark_and_artifact_paths(tmp_path
 
     assert config.runtime.backend == "cpu_simd"
     assert config.benchmark.tasks == ["vector_add", "reduce_sum"]
+
+
+def test_load_runtime_config_wraps_invalid_typed_values(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[retrieval]\nover_retrieval_lambda=\"three\"\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError):
+        load_runtime_config(config_path)
+
+
+def test_load_runtime_config_rejects_unknown_keys(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[runtime]\nbackend=\"cpu_simd\"\nunknown_option=true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigLoadError):
+        load_runtime_config(config_path)
