@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evokernel"
+version = "0.1.0"
+description = "EvoKernel prototype"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic",
+    "httpx",
+    "numpy",
+    "typing-extensions",
+]
+
+[project.scripts]
+evokernel = "evokernel.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-httpx",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evokernel"]
