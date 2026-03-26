@@ -1,0 +1,18 @@
+[retrieval]
+final_context_count = 4
+over_retrieval_lambda = 3
+epsilon = 0.1
+alpha = 0.2
+
+[generator]
+provider = "openai_compatible"
+model = "gpt-5.4"
+api_key_env = "OPENAI_API_KEY"
+
+[runtime]
+backend = "cpu_simd"
+artifact_dir = "artifacts"
+log_dir = "logs"
+
+[benchmark]
+tasks = ["vector_add", "reduce_sum", "matmul_tiled", "layernorm"]
