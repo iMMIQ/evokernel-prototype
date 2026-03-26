@@ -7,6 +7,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+from numpy.ctypeslib import ndpointer
 
 from evokernel.backend.base import (
     CandidateArtifact,
@@ -99,7 +100,7 @@ class CpuSimdBackend:
         self, artifact: CandidateArtifact, case: dict[str, Any]
     ) -> ReferenceExecutionResult:
         case_path = self._serialize_case(artifact=artifact, case=case)
-        output = artifact.task.reference_impl(**case)
+        output = self._execute_candidate_case(artifact=artifact, case=case)
         return ReferenceExecutionResult(case_path=case_path, output=output)
 
     def measure_latency(
@@ -109,25 +110,19 @@ class CpuSimdBackend:
         warmup_runs: int,
         timed_runs: int,
     ) -> float:
-        case_path = self._serialize_case(artifact=artifact, case=case)
-        callable_obj = self.load_callable(artifact)
-        entrypoint = getattr(callable_obj, "evokernel_run_case", None)
-        if entrypoint is None:
-            raise AttributeError(
-                "Compiled artifact does not export evokernel_run_case"
-            )
-        if hasattr(entrypoint, "argtypes"):
-            entrypoint.argtypes = [ctypes.c_char_p]
-        if hasattr(entrypoint, "restype"):
-            entrypoint.restype = ctypes.c_int
-        case_bytes = str(case_path).encode("utf-8")
+        self._serialize_case(artifact=artifact, case=case)
+        runner = self._build_candidate_runner(
+            callable_obj=self.load_callable(artifact),
+            task_id=artifact.task.task_id,
+            case=case,
+        )
 
         for _ in range(warmup_runs):
-            entrypoint(case_bytes)
+            runner()
 
         started_at = perf_counter()
         for _ in range(timed_runs):
-            entrypoint(case_bytes)
+            runner()
         elapsed = perf_counter() - started_at
         return elapsed * 1000.0 / max(timed_runs, 1)
 
@@ -150,25 +145,127 @@ class CpuSimdBackend:
         return (
             "// Auto-generated harness stub for EvoKernel CPU SIMD tasks.\n"
             f"// Task: {task.task_id}\n"
-            "#include <cstdio>\n"
-            "extern \"C\" void evokernel_entry();\n"
-            "extern \"C\" int evokernel_run_case(const char* case_path) {\n"
-            "    if (case_path == nullptr) {\n"
-            "        return -1;\n"
-            "    }\n"
-            "    std::FILE* handle = std::fopen(case_path, \"rb\");\n"
-            "    if (handle == nullptr) {\n"
-            "        return -2;\n"
-            "    }\n"
-            "    int byte_count = 0;\n"
-            "    while (std::fgetc(handle) != EOF) {\n"
-            "        ++byte_count;\n"
-            "    }\n"
-            "    std::fclose(handle);\n"
-            "    evokernel_entry();\n"
-            "    return byte_count;\n"
+            "extern \"C\" const char* evokernel_task_id() {\n"
+            f"    return \"{task.task_id}\";\n"
             "}\n"
         )
+
+    def _execute_candidate_case(
+        self, artifact: CandidateArtifact, case: dict[str, Any]
+    ) -> Any:
+        runner = self._build_candidate_runner(
+            callable_obj=self.load_callable(artifact),
+            task_id=artifact.task.task_id,
+            case=case,
+        )
+        return runner()
+
+    def _build_candidate_runner(
+        self, callable_obj: Any, task_id: str, case: dict[str, Any]
+    ) -> Any:
+        entrypoint = getattr(callable_obj, "evokernel_entry", None)
+        if entrypoint is None:
+            raise AttributeError("Compiled artifact does not export evokernel_entry")
+
+        if task_id == "vector_add":
+            return self._build_vector_add_runner(entrypoint, case)
+        if task_id == "reduce_sum":
+            return self._build_reduce_sum_runner(entrypoint, case)
+        if task_id == "matmul_tiled":
+            return self._build_matmul_tiled_runner(entrypoint, case)
+        if task_id == "layernorm":
+            return self._build_layernorm_runner(entrypoint, case)
+        raise NotImplementedError(f"Unsupported CPU SIMD task: {task_id}")
+
+    def _build_vector_add_runner(
+        self, entrypoint: Any, case: dict[str, Any]
+    ) -> Any:
+        a = np.ascontiguousarray(case["a"], dtype=np.float32)
+        b = np.ascontiguousarray(case["b"], dtype=np.float32)
+        out = np.empty_like(a)
+        if hasattr(entrypoint, "argtypes"):
+            entrypoint.argtypes = [
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ctypes.c_size_t,
+            ]
+            entrypoint.restype = None
+
+        def run() -> np.ndarray:
+            entrypoint(out, a, b, a.size)
+            return np.array(out, copy=True)
+
+        return run
+
+    def _build_reduce_sum_runner(
+        self, entrypoint: Any, case: dict[str, Any]
+    ) -> Any:
+        x = np.ascontiguousarray(case["x"], dtype=np.float32)
+        out = np.zeros(1, dtype=np.float32)
+        if hasattr(entrypoint, "argtypes"):
+            entrypoint.argtypes = [
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ctypes.c_size_t,
+            ]
+            entrypoint.restype = None
+
+        def run() -> np.float32:
+            out[0] = 0.0
+            entrypoint(out, x, x.size)
+            return np.float32(out[0])
+
+        return run
+
+    def _build_matmul_tiled_runner(
+        self, entrypoint: Any, case: dict[str, Any]
+    ) -> Any:
+        a = np.ascontiguousarray(case["a"], dtype=np.float32)
+        b = np.ascontiguousarray(case["b"], dtype=np.float32)
+        out = np.empty((a.shape[0], b.shape[1]), dtype=np.float32)
+        if hasattr(entrypoint, "argtypes"):
+            entrypoint.argtypes = [
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ctypes.c_size_t,
+                ctypes.c_size_t,
+                ctypes.c_size_t,
+            ]
+            entrypoint.restype = None
+
+        def run() -> np.ndarray:
+            entrypoint(out, a, b, a.shape[0], a.shape[1], b.shape[1])
+            return np.array(out, copy=True)
+
+        return run
+
+    def _build_layernorm_runner(
+        self, entrypoint: Any, case: dict[str, Any]
+    ) -> Any:
+        x = np.ascontiguousarray(case["x"], dtype=np.float32)
+        gamma = np.ascontiguousarray(case["gamma"], dtype=np.float32)
+        beta = np.ascontiguousarray(case["beta"], dtype=np.float32)
+        out = np.empty_like(x)
+        eps = float(case["eps"])
+        if hasattr(entrypoint, "argtypes"):
+            entrypoint.argtypes = [
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ndpointer(dtype=np.float32),
+                ctypes.c_size_t,
+                ctypes.c_size_t,
+                ctypes.c_float,
+            ]
+            entrypoint.restype = None
+
+        def run() -> np.ndarray:
+            entrypoint(out, x, gamma, beta, x.shape[0], x.shape[1], eps)
+            return np.array(out, copy=True)
+
+        return run
 
     def _serialize_case(
         self, artifact: CandidateArtifact, case: dict[str, Any]

@@ -14,7 +14,7 @@ class CompilerSpec:
 
 
 class CpuSimdToolchain:
-    COMPILER_PREFERENCE = ("clang++", "clang", "g++", "gcc")
+    COMPILER_PREFERENCE = ("clang", "clang++", "gcc", "g++")
 
     def __init__(self, compiler: CompilerSpec | None = None) -> None:
         self._compiler = compiler or self._detect_compiler()

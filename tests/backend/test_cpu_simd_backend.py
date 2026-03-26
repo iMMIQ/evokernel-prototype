@@ -1,5 +1,7 @@
 import json
 
+import numpy as np
+
 from evokernel.backend.cpu_simd import CpuSimdBackend
 from evokernel.backend.toolchain import CompilerSpec, CpuSimdToolchain
 from evokernel.benchmarks.cpu_simd_tasks import build_vector_add_task
@@ -46,7 +48,9 @@ def test_vector_add_task_exposes_reference_inputs_tolerances_and_prompt_metadata
 
 def test_cpu_toolchain_prefers_clang_over_gcc(monkeypatch):
     available = {
+        "clang": "/usr/bin/clang",
         "clang++": "/usr/bin/clang++",
+        "gcc": "/usr/bin/gcc",
         "g++": "/usr/bin/g++",
     }
 
@@ -57,7 +61,13 @@ def test_cpu_toolchain_prefers_clang_over_gcc(monkeypatch):
 
     toolchain = CpuSimdToolchain()
 
-    assert toolchain.compiler.executable == "clang++"
+    assert CpuSimdToolchain.COMPILER_PREFERENCE == (
+        "clang",
+        "clang++",
+        "gcc",
+        "g++",
+    )
+    assert toolchain.compiler.executable == "clang"
 
 
 def test_cpu_toolchain_build_command_includes_harness(tmp_path):
@@ -78,19 +88,36 @@ def test_cpu_toolchain_build_command_includes_harness(tmp_path):
     assert str(artifact.harness_path) in command
 
 
-def test_run_reference_case_serializes_case_into_attempt_artifact(tmp_path):
+def test_run_reference_case_executes_compiled_vector_add_candidate(
+    tmp_path,
+):
     backend = CpuSimdBackend(
         work_root=tmp_path,
-        toolchain=CpuSimdToolchain(compiler=CompilerSpec(executable="clang++")),
+        toolchain=CpuSimdToolchain(compiler=CompilerSpec(executable="clang")),
     )
     task = build_vector_add_task()
     case = task.randomized_inputs[0]
 
     artifact = backend.materialize_candidate(
         task=task,
-        candidate_code='extern "C" void evokernel_entry() {}',
+        candidate_code="""
+#include <cstddef>
+extern "C" void evokernel_entry(
+    float* out,
+    const float* a,
+    const float* b,
+    std::size_t n
+) {
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = a[i] - b[i];
+    }
+}
+""",
         attempt_id="attempt-reference",
     )
+    compilation = backend.compile(artifact)
+    assert compilation.returncode == 0, compilation.stderr
+
     result = backend.run_reference_case(artifact=artifact, case=case)
 
     assert result.case_path.exists()
@@ -98,9 +125,10 @@ def test_run_reference_case_serializes_case_into_attempt_artifact(tmp_path):
     serialized_case = json.loads(result.case_path.read_text(encoding="utf-8"))
     assert serialized_case["inputs"]["a"][0] == 0.0
     assert serialized_case["task_id"] == task.task_id
+    np.testing.assert_allclose(result.output, case["a"] - case["b"])
 
 
-def test_measure_latency_uses_serialized_case_and_harness_entrypoint(
+def test_measure_latency_passes_real_case_buffers_into_candidate_entrypoint(
     tmp_path, monkeypatch
 ):
     backend = CpuSimdBackend(
@@ -119,9 +147,11 @@ def test_measure_latency_uses_serialized_case_and_harness_entrypoint(
     recorded_paths: list[str] = []
 
     class FakeCallable:
-        def evokernel_run_case(self, case_path):
-            recorded_paths.append(case_path.decode("utf-8"))
-            return len(recorded_paths)
+        def evokernel_entry(self, out, a, b, n):
+            recorded_paths.append(int(n))
+            np.testing.assert_allclose(a[:n], case["a"])
+            np.testing.assert_allclose(b[:n], case["b"])
+            out[:n] = a[:n] + b[:n]
 
     monkeypatch.setattr(backend, "load_callable", lambda _: FakeCallable())
 
@@ -134,7 +164,7 @@ def test_measure_latency_uses_serialized_case_and_harness_entrypoint(
 
     assert latency_ms >= 0.0
     assert len(recorded_paths) == 3
-    assert all(path == recorded_paths[0] for path in recorded_paths)
+    assert recorded_paths == [8, 8, 8]
     serialized_case = json.loads(
         artifact.last_case_path.read_text(encoding="utf-8")
     )
