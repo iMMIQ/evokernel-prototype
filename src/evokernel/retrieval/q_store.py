@@ -13,6 +13,11 @@ class QValueStore:
     def get(self, stage: Stage, state_signature: str, memory_id: str) -> float:
         return self._bucket(stage).get((state_signature, memory_id), 0.0)
 
+    def set(self, stage: Stage, state_signature: str, memory_id: str, value: float) -> float:
+        bucket = self._bucket(stage)
+        bucket[(state_signature, memory_id)] = value
+        return value
+
     def update(
         self,
         stage: Stage,
