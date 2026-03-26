@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from shutil import which
 import subprocess
 
@@ -15,6 +14,8 @@ class CompilerSpec:
 
 
 class CpuSimdToolchain:
+    COMPILER_PREFERENCE = ("clang++", "clang", "g++", "gcc")
+
     def __init__(self, compiler: CompilerSpec | None = None) -> None:
         self._compiler = compiler or self._detect_compiler()
 
@@ -30,6 +31,7 @@ class CpuSimdToolchain:
             "-O3",
             "-std=c++17",
             str(artifact.source_path),
+            str(artifact.harness_path),
             "-o",
             str(artifact.binary_path),
         ]
@@ -51,7 +53,7 @@ class CpuSimdToolchain:
         )
 
     def _detect_compiler(self) -> CompilerSpec:
-        for executable in ("clang++", "clang", "g++", "gcc"):
+        for executable in self.COMPILER_PREFERENCE:
             if which(executable):
                 return CompilerSpec(executable=executable)
         raise RuntimeError(

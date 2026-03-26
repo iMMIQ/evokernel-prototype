@@ -12,6 +12,9 @@ class CandidateArtifact:
     source_path: Path
     harness_path: Path
     binary_path: Path
+    compiler_info_path: Path
+    case_dir: Path
+    last_case_path: Path | None
     task: Any
 
 
@@ -28,6 +31,12 @@ class CompilationResult:
 class StructuredBackendError:
     category: str
     message: str
+
+
+@dataclass(slots=True)
+class ReferenceExecutionResult:
+    case_path: Path
+    output: Any
 
 
 class Backend(Protocol):
