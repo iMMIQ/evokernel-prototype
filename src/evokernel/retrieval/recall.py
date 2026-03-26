@@ -21,7 +21,6 @@ def recall_candidates(
             item.is_feasible,
             item.became_start_point,
             item.reward,
-            item.summary,
             item.memory_id,
         ),
         reverse=True,

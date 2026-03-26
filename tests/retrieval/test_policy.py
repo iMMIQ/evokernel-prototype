@@ -107,15 +107,42 @@ def memory_items() -> list[MemoryItem]:
 
 
 def test_recall_candidates_limits_pool_by_lambda_times_n(memory_items):
+    overflow_item = MemoryItem(
+        memory_id="overflow-id",
+        task_id="vector_add",
+        backend_id="cuda",
+        operator_family="reduction",
+        stage=Stage.REFINING,
+        code="void overflow();",
+        summary="overflow",
+        reward=-0.5,
+        is_feasible=False,
+        became_start_point=False,
+        verifier_outcome=VerificationOutcome(
+            anti_hack_passed=True,
+            compile_passed=False,
+            correctness_passed=False,
+            latency_ms=None,
+            error_category="compile_error",
+            feedback_summary="overflow",
+        ),
+    )
     recalled = recall_candidates(
-        items=memory_items,
+        items=[*memory_items, overflow_item],
         operator_family="elementwise",
         backend_id="cpu_simd",
         stage=Stage.DRAFTING,
         final_context_count=2,
         over_retrieval_lambda=3,
     )
-    assert len(recalled) == 6
+    assert [item.memory_id for item in recalled] == [
+        "best-id",
+        "second-id",
+        "fourth-id",
+        "third-id",
+        "sixth-id",
+        "fifth-id",
+    ]
 
 
 def test_recall_candidates_prefers_backend_and_stage_matches_before_reward():
@@ -185,12 +212,63 @@ def test_recall_candidates_prefers_backend_and_stage_matches_before_reward():
     ]
 
 
+def test_recall_candidates_uses_memory_id_not_summary_as_final_tie_break():
+    outcome = VerificationOutcome(
+        anti_hack_passed=True,
+        compile_passed=True,
+        correctness_passed=True,
+        latency_ms=1.0,
+        error_category=None,
+        feedback_summary="ok",
+    )
+    items = [
+        MemoryItem(
+            memory_id="a-id",
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void a();",
+            summary="zzz-summary",
+            reward=0.5,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+        ),
+        MemoryItem(
+            memory_id="z-id",
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void z();",
+            summary="aaa-summary",
+            reward=0.5,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+        ),
+    ]
+
+    recalled = recall_candidates(
+        items=items,
+        operator_family="elementwise",
+        backend_id="cpu_simd",
+        stage=Stage.DRAFTING,
+        final_context_count=2,
+        over_retrieval_lambda=1,
+    )
+
+    assert [item.memory_id for item in recalled] == ["z-id", "a-id"]
+
+
 def test_select_context_items_prefers_high_q_items_when_epsilon_zero(memory_items):
     q_store = QValueStore()
     q_store.set(stage=Stage.DRAFTING, state_signature="sig", memory_id="best-id", value=0.9)
     q_store.set(stage=Stage.DRAFTING, state_signature="sig", memory_id="second-id", value=0.7)
+    candidates = [memory_items[1], memory_items[3], memory_items[0], memory_items[2]]
     selected = select_context_items(
-        candidates=memory_items,
+        candidates=candidates,
         stage=Stage.DRAFTING,
         state_signature="sig",
         q_store=q_store,
