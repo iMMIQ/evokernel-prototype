@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from collections.abc import Callable
@@ -85,6 +86,7 @@ def _build_generator(
     resolved_generator = generator_name or config.generator.provider
 
     if resolved_generator == "deterministic-test":
+        _load_dev_generator_override()
         try:
             override = GENERATOR_OVERRIDES[resolved_generator]
         except KeyError as exc:
@@ -95,6 +97,33 @@ def _build_generator(
     if resolved_generator == "openai_compatible":
         return OpenAICompatibleGenerator.from_config(config.generator)
     raise ValueError(f"Unsupported generator: {resolved_generator}")
+
+
+def _load_dev_generator_override() -> None:
+    if "deterministic-test" in GENERATOR_OVERRIDES:
+        return
+
+    conftest_path = Path(__file__).resolve().parents[2] / "tests" / "conftest.py"
+    if not conftest_path.is_file():
+        return
+
+    spec = importlib.util.spec_from_file_location(
+        "_evokernel_tests_conftest",
+        conftest_path,
+    )
+    if spec is None or spec.loader is None:
+        return
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return
+
+    installer = getattr(module, "install_deterministic_test_generator_override", None)
+    if installer is None:
+        return
+    installer(GENERATOR_OVERRIDES)
 
 
 def _write_run_report(*, artifact_dir: Path, report, runtime) -> None:

@@ -15,4 +15,4 @@ artifact_dir = "artifacts"
 log_dir = "logs"
 
 [benchmark]
-tasks = ["vector_add", "reduce_sum", "matmul_tiled"]
+tasks = ["vector_add", "reduce_sum", "matmul_tiled", "layernorm"]

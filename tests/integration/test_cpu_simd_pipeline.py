@@ -1,65 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 
-import evokernel.cli as cli_module
 from evokernel.cli import main
-from evokernel.generator.base import GenerationRequest, GenerationResult
 
 
-class _DeterministicTestGenerator:
-    _VECTOR_ADD_CODE = """
-#include <cstddef>
-
-// fixture deterministic vector_add
-extern "C" void evokernel_entry(
-    float* out,
-    const float* a,
-    const float* b,
-    std::size_t n
-) {
-    for (std::size_t i = 0; i < n; ++i) {
-        out[i] = a[i] + b[i];
-    }
-}
-""".strip()
-
-    _REDUCE_SUM_CODE = """
-#include <cstddef>
-
-// fixture deterministic reduce_sum
-extern "C" void evokernel_entry(
-    float* out,
-    const float* x,
-    std::size_t n
-) {
-    float sum = 0.0f;
-    for (std::size_t i = 0; i < n; ++i) {
-        sum += x[i];
-    }
-    out[0] = sum;
-}
-""".strip()
-
-    def generate(self, request: GenerationRequest) -> GenerationResult:
-        task_summary = request.task_summary.lower()
-        if "add two float32 vectors" in task_summary:
-            return GenerationResult(code=self._VECTOR_ADD_CODE)
-        if "reduce a float32 vector to a scalar sum" in task_summary:
-            return GenerationResult(code=self._REDUCE_SUM_CODE)
-        raise ValueError(request.task_summary)
-
-
-def _install_deterministic_generator_override(monkeypatch) -> None:
-    monkeypatch.setitem(
-        cli_module.GENERATOR_OVERRIDES,
-        "deterministic-test",
-        lambda _config: _DeterministicTestGenerator(),
-    )
-
-
-def test_cpu_simd_pipeline_runs_vector_add(tmp_path, monkeypatch):
-    _install_deterministic_generator_override(monkeypatch)
+def test_cpu_simd_pipeline_runs_vector_add(
+    tmp_path, deterministic_test_generator_override
+):
 
     exit_code = main(
         [
@@ -93,8 +44,38 @@ def test_cpu_simd_pipeline_runs_vector_add(tmp_path, monkeypatch):
     assert "fixture deterministic vector_add" in candidate_code
 
 
-def test_cpu_simd_pipeline_reuses_memory_across_two_tasks(tmp_path, monkeypatch):
-    _install_deterministic_generator_override(monkeypatch)
+def test_cli_subprocess_supports_deterministic_test_generator_for_local_verification(
+    tmp_path,
+):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "evokernel.cli",
+            "--config",
+            "configs/cpu_simd.toml",
+            "--task",
+            "vector_add",
+            "--generator",
+            "deterministic-test",
+            "--work-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (
+        tmp_path / "artifacts" / "vector_add" / "run_report.json"
+    ).exists()
+
+
+def test_cpu_simd_pipeline_reuses_memory_across_two_tasks(
+    tmp_path, deterministic_test_generator_override
+):
 
     first_exit = main(
         [

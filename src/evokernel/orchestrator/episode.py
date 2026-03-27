@@ -39,7 +39,6 @@ class _OnlineRewardNormalizer:
 
 def run_episode(runtime, task_id: str) -> RunReport:
     task = get_benchmark_task(task_id)
-    retrieval_config = runtime.config.retrieval
     attempt_budget = getattr(runtime.config.runtime, "attempt_budget", 1)
     report = RunReport(task_id=task_id, backend_id=runtime.backend_id)
 

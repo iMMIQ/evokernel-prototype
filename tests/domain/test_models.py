@@ -64,6 +64,12 @@ def test_load_runtime_config_reads_backend_benchmark_and_artifact_paths(tmp_path
     assert config.benchmark.tasks == ["vector_add", "reduce_sum"]
 
 
+def test_default_config_uses_layernorm_in_initial_benchmark():
+    config = load_runtime_config("configs/default.toml")
+
+    assert "layernorm" in config.benchmark.tasks
+
+
 def test_load_runtime_config_wraps_invalid_typed_values(tmp_path):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
