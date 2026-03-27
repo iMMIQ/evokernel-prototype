@@ -130,6 +130,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
             reward=reward,
             selected_context=selected_context,
             start_point=start_point,
+            produced_item=memory_item,
         )
 
         report.attempts.append(
@@ -180,7 +181,7 @@ def _select_context(runtime, task, stage: Stage, state_signature: str) -> list[M
 
 
 def _select_start_point(runtime, task, state_signature: str) -> MemoryItem | None:
-    start_points = runtime.memory_store.list_start_points(task.task_id)
+    start_points = list(reversed(runtime.memory_store.list_start_points(task.task_id)))
     if not start_points:
         return None
 
@@ -233,6 +234,8 @@ def _calculate_reward(
     new_latency = verifier_outcome.latency_ms
     if best_latency is None or new_latency is None:
         return 0.0
+    if best_latency <= 0 or new_latency <= 0:
+        return 0.0
 
     raw_reward = tanh(log(best_latency) - log(new_latency))
     return reward_normalizer.normalize(raw_reward)
@@ -245,6 +248,7 @@ def _update_q_values(
     reward: float,
     selected_context: list[MemoryItem],
     start_point: MemoryItem | None,
+    produced_item: MemoryItem,
 ) -> None:
     alpha = runtime.config.retrieval.alpha
     for item in selected_context:
@@ -256,20 +260,28 @@ def _update_q_values(
             alpha=alpha,
         )
 
-    if start_point is None:
-        return
+    if start_point is not None:
+        already_updated = any(
+            item.memory_id == start_point.memory_id
+            for item in selected_context
+        )
+        if not already_updated:
+            runtime.q_store.update(
+                stage=stage,
+                state_signature=state_signature,
+                memory_id=start_point.memory_id,
+                reward=reward,
+                alpha=alpha,
+            )
 
-    already_updated = any(item.memory_id == start_point.memory_id for item in selected_context)
-    if already_updated:
-        return
-
-    runtime.q_store.update(
-        stage=stage,
-        state_signature=state_signature,
-        memory_id=start_point.memory_id,
-        reward=reward,
-        alpha=alpha,
-    )
+    if stage == Stage.REFINING and produced_item.is_feasible:
+        runtime.q_store.update(
+            stage=stage,
+            state_signature=state_signature,
+            memory_id=produced_item.memory_id,
+            reward=reward,
+            alpha=alpha,
+        )
 
 
 def _get_backend_constraints(runtime, task) -> list[str]:
