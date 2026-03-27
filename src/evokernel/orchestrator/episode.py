@@ -7,6 +7,7 @@ from evokernel.benchmarks.task_registry import get_benchmark_task
 from evokernel.domain.enums import Stage
 from evokernel.domain.models import MemoryItem
 from evokernel.generator.base import GenerationRequest
+from evokernel.memory.document import build_retrieval_query
 from evokernel.memory.state_signature import build_state_signature
 from evokernel.orchestrator.run_report import AttemptRecord, RunReport
 from evokernel.retrieval.policy import select_context_items
@@ -39,7 +40,7 @@ class _OnlineRewardNormalizer:
 
 def run_episode(runtime, task_id: str) -> RunReport:
     task = get_benchmark_task(task_id)
-    attempt_budget = getattr(runtime.config.runtime, "attempt_budget", 1)
+    attempt_budget = runtime.config.runtime.attempt_budget
     report = RunReport(task_id=task_id, backend_id=runtime.backend_id)
 
     stage = Stage.DRAFTING
@@ -48,26 +49,31 @@ def run_episode(runtime, task_id: str) -> RunReport:
     last_feedback: str | None = None
     reward_normalizer = _OnlineRewardNormalizer()
     memory_to_attempt: dict[str, str] = {}
+    shape_bucket = _build_shape_bucket(task)
 
     for attempt_index in range(1, attempt_budget + 1):
         state_signature = build_state_signature(
             backend_id=runtime.backend_id,
             operator_family=task.operator_family,
             stage=stage,
-            shape_bucket=_build_shape_bucket(task),
+            shape_bucket=shape_bucket,
             error_category=last_error_category,
-        )
-        selected_context = _select_context(
-            runtime=runtime,
-            task=task,
-            stage=stage,
-            state_signature=state_signature,
         )
         start_point = _select_start_point(
             runtime=runtime,
             task=task,
             state_signature=state_signature,
         ) if stage == Stage.REFINING else None
+        selected_context = _select_context(
+            runtime=runtime,
+            task=task,
+            stage=stage,
+            state_signature=state_signature,
+            shape_bucket=shape_bucket,
+            error_category=last_error_category,
+            feedback_summary=last_feedback,
+            start_point=start_point,
+        )
 
         retrieved_context = _build_retrieved_context(
             selected_context=selected_context,
@@ -159,13 +165,40 @@ def run_episode(runtime, task_id: str) -> RunReport:
     return report
 
 
-def _select_context(runtime, task, stage: Stage, state_signature: str) -> list[MemoryItem]:
+def _select_context(
+    runtime,
+    task,
+    stage: Stage,
+    state_signature: str,
+    shape_bucket: str,
+    error_category: str | None,
+    feedback_summary: str | None,
+    start_point: MemoryItem | None,
+) -> list[MemoryItem]:
     retrieval_config = runtime.config.retrieval
-    recalled = recall_candidates(
-        items=_build_context_candidate_pool(runtime, task.task_id),
-        operator_family=task.operator_family,
+    query_text = build_retrieval_query(
         backend_id=runtime.backend_id,
-        stage=Stage.DRAFTING if stage == Stage.DRAFTING else None,
+        task_id=task.task_id,
+        operator_family=task.operator_family,
+        task_summary=task.summary,
+        stage=stage,
+        shape_bucket=shape_bucket,
+        keywords=list(task.prompt_metadata.get("keywords", [])),
+        error_category=error_category,
+        feedback_summary=feedback_summary,
+        start_point=start_point,
+    )
+    query_embedding = runtime.embedder.embed_texts([query_text])[0]
+    recalled = recall_candidates(
+        items=runtime.memory_store.recall(
+            backend_id=runtime.backend_id,
+            exclude_memory_ids=(
+                {start_point.memory_id}
+                if start_point is not None
+                else None
+            ),
+        ),
+        query_embedding=query_embedding,
         final_context_count=retrieval_config.final_context_count,
         over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
     )
@@ -179,27 +212,8 @@ def _select_context(runtime, task, stage: Stage, state_signature: str) -> list[M
     )
 
 
-def _build_context_candidate_pool(runtime, task_id: str) -> list[MemoryItem]:
-    combined_items: list[MemoryItem] = []
-    seen_memory_ids: set[str] = set()
-
-    for item in runtime.memory_store.recall(task_id):
-        if item.memory_id in seen_memory_ids:
-            continue
-        combined_items.append(item)
-        seen_memory_ids.add(item.memory_id)
-
-    for item in getattr(runtime, "loaded_memory_items", []):
-        if item.memory_id in seen_memory_ids:
-            continue
-        combined_items.append(item)
-        seen_memory_ids.add(item.memory_id)
-
-    return combined_items
-
-
 def _select_start_point(runtime, task, state_signature: str) -> MemoryItem | None:
-    start_points = list(reversed(runtime.memory_store.list_start_points(task.task_id)))
+    start_points = runtime.memory_store.list_start_points(task.task_id)
     if not start_points:
         return None
 

@@ -8,6 +8,30 @@ from evokernel.retrieval.q_store import QValueStore
 from evokernel.retrieval.reward import update_q_value
 
 
+def _build_memory_item(*, memory_id: str, task_id: str = "vector_add") -> MemoryItem:
+    return MemoryItem(
+        memory_id=memory_id,
+        task_id=task_id,
+        backend_id="cpu_simd",
+        operator_family="elementwise",
+        stage=Stage.DRAFTING,
+        code="void evokernel_entry() {}",
+        summary=f"summary-{memory_id}",
+        memory_kind="generation_trace",
+        reward=0.25,
+        is_feasible=False,
+        became_start_point=False,
+        verifier_outcome=VerificationOutcome(
+            anti_hack_passed=True,
+            compile_passed=True,
+            correctness_passed=False,
+            latency_ms=None,
+            error_category="wrong_answer",
+            feedback_summary="edge cases fail",
+        ),
+    )
+
+
 def test_build_state_signature_uses_backend_task_stage_and_error():
     signature = build_state_signature(
         backend_id="cpu_simd",
@@ -55,6 +79,26 @@ def test_q_value_store_tracks_q1_and_q2_independently():
     store.update(stage=Stage.REFINING, state_signature=key, memory_id="m1", reward=-1.0, alpha=0.5)
     assert store.get(stage=Stage.DRAFTING, state_signature=key, memory_id="m1") == 0.5
     assert store.get(stage=Stage.REFINING, state_signature=key, memory_id="m1") == -0.5
+
+
+def test_q_value_store_persists_to_sqlite(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    first = QValueStore(db_path=path)
+    first.set(
+        stage=Stage.DRAFTING,
+        state_signature="sig",
+        memory_id="memory-1",
+        value=0.8,
+    )
+    first.close()
+
+    second = QValueStore(db_path=path)
+    assert second.get(
+        stage=Stage.DRAFTING,
+        state_signature="sig",
+        memory_id="memory-1",
+    ) == 0.8
+    second.close()
 
 
 def test_memory_item_serialization_round_trip():
@@ -130,63 +174,40 @@ def test_memory_item_rejects_infeasible_start_point():
         )
 
 
-def test_memory_store_jsonl_round_trip(tmp_path):
-    store = InMemoryStore()
-    item = MemoryItem(
-        task_id="vector_add",
-        backend_id="cpu_simd",
-        operator_family="elementwise",
-        stage=Stage.DRAFTING,
-        code="void evokernel_entry() {}",
-        summary="first draft",
-        memory_kind="generation_trace",
-        reward=0.25,
-        is_feasible=False,
-        became_start_point=False,
-        verifier_outcome=VerificationOutcome(
-            anti_hack_passed=True,
-            compile_passed=True,
-            correctness_passed=False,
-            latency_ms=None,
-            error_category="wrong_answer",
-            feedback_summary="edge cases fail",
-        ),
-    )
-    store.add(item)
+def test_memory_store_sqlite_round_trip(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    writer = InMemoryStore(path)
+    writer.add(_build_memory_item(memory_id="persisted"))
+    writer.close()
 
-    path = tmp_path / "memory.jsonl"
-    store.save_jsonl(path)
-    restored = InMemoryStore.load_jsonl(path)
+    reader = InMemoryStore(path, reuse_existing=True)
+    recalled = reader.recall(task_id="vector_add")
 
-    recalled = restored.recall("vector_add")
     assert len(recalled) == 1
-    assert recalled[0].summary == "first draft"
+    assert recalled[0].summary == "summary-persisted"
+    reader.close()
+
+
+def test_memory_store_hides_historical_rows_without_reuse(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    first = InMemoryStore(path)
+    first.add(_build_memory_item(memory_id="history"))
+    first.close()
+
+    second = InMemoryStore(path, reuse_existing=False)
+    assert second.loaded_memory_ids == []
+    assert second.recall(task_id="vector_add") == []
+
+    second.add(_build_memory_item(memory_id="current"))
+    assert [item.memory_id for item in second.recall(task_id="vector_add")] == [
+        "current"
+    ]
+    second.close()
 
 
 def test_memory_store_save_jsonl_is_atomic(tmp_path, monkeypatch):
     store = InMemoryStore()
-    store.add(
-        MemoryItem(
-            task_id="vector_add",
-            backend_id="cpu_simd",
-            operator_family="elementwise",
-            stage=Stage.DRAFTING,
-            code="void evokernel_entry() {}",
-            summary="new data",
-            memory_kind="generation_trace",
-            reward=0.25,
-            is_feasible=False,
-            became_start_point=False,
-            verifier_outcome=VerificationOutcome(
-                anti_hack_passed=True,
-                compile_passed=True,
-                correctness_passed=False,
-                latency_ms=None,
-                error_category="wrong_answer",
-                feedback_summary="edge cases fail",
-            ),
-        )
-    )
+    store.add(_build_memory_item(memory_id="new-data"))
 
     path = tmp_path / "memory.jsonl"
     path.write_text("old data\n", encoding="utf-8")

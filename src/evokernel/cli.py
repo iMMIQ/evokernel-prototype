@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from evokernel.backend.cpu_simd import CpuSimdBackend
 from evokernel.config import AppConfig, load_runtime_config
 from evokernel.generator.openai_compatible import OpenAICompatibleGenerator
+from evokernel.memory.embedding import build_text_embedder
 from evokernel.memory.store import InMemoryStore
 from evokernel.orchestrator.episode import run_episode
 from evokernel.retrieval.q_store import QValueStore
@@ -21,17 +22,20 @@ GENERATOR_OVERRIDES: dict[str, Callable[[AppConfig], object] | object] = {}
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    runtime = None
 
     try:
         config = load_runtime_config(args.config)
-        runtime, artifact_dir, memory_path = _build_runtime(args, config)
+        runtime, artifact_dir = _build_runtime(args, config)
         report = run_episode(runtime, task_id=args.task)
-        runtime.memory_store.save_jsonl(memory_path)
         _write_run_report(artifact_dir=artifact_dir, report=report, runtime=runtime)
         return 0 if report.best_candidate is not None else 1
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        if runtime is not None:
+            runtime.memory_store.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -47,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _build_runtime(
     args: argparse.Namespace,
     config: AppConfig,
-) -> tuple[SimpleNamespace, Path, Path]:
+) -> tuple[SimpleNamespace, Path]:
     work_root = (
         Path(args.work_root).resolve()
         if args.work_root is not None
@@ -55,14 +59,13 @@ def _build_runtime(
     )
     artifact_dir = work_root / config.runtime.artifact_dir / args.task
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    memory_path = work_root / "shared_memory.jsonl"
-
-    memory_store = (
-        InMemoryStore.load_jsonl(memory_path)
-        if args.reuse_memory
-        else InMemoryStore()
+    memory_path = work_root / "shared_memory.sqlite3"
+    embedder = build_text_embedder(config.embedding)
+    memory_store = InMemoryStore(
+        memory_path,
+        embedder=embedder,
+        reuse_existing=args.reuse_memory,
     )
-    loaded_memory_items = list(getattr(memory_store, "_items", []))
     backend = CpuSimdBackend(work_root=artifact_dir)
 
     runtime = SimpleNamespace(
@@ -70,13 +73,13 @@ def _build_runtime(
         backend_id=config.runtime.backend,
         backend_constraints=backend.prompt_constraints(),
         generator=_build_generator(args.generator, config),
+        embedder=embedder,
         memory_store=memory_store,
-        q_store=QValueStore(),
+        q_store=QValueStore(connection=memory_store.connection),
         config=config,
-        loaded_memory_items=loaded_memory_items,
-        loaded_memory_ids=[item.memory_id for item in loaded_memory_items],
+        loaded_memory_ids=memory_store.loaded_memory_ids,
     )
-    return runtime, artifact_dir, memory_path
+    return runtime, artifact_dir
 
 
 def _build_generator(

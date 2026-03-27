@@ -115,6 +115,66 @@ def test_cpu_simd_pipeline_reuses_memory_across_two_tasks(
     assert second_report["memory"]["reused_memory_ids"]
 
 
+def test_cpu_simd_pipeline_preserves_shared_memory_when_reuse_is_disabled(
+    tmp_path, deterministic_test_generator_override
+):
+    first_exit = main(
+        [
+            "--config",
+            "configs/cpu_simd.toml",
+            "--task",
+            "vector_add",
+            "--generator",
+            "deterministic-test",
+            "--work-root",
+            str(tmp_path),
+        ]
+    )
+    second_exit = main(
+        [
+            "--config",
+            "configs/cpu_simd.toml",
+            "--task",
+            "reduce_sum",
+            "--generator",
+            "deterministic-test",
+            "--work-root",
+            str(tmp_path),
+        ]
+    )
+    third_exit = main(
+        [
+            "--config",
+            "configs/cpu_simd.toml",
+            "--task",
+            "vector_add",
+            "--generator",
+            "deterministic-test",
+            "--work-root",
+            str(tmp_path),
+            "--reuse-memory",
+        ]
+    )
+
+    assert first_exit == 0
+    assert second_exit == 0
+    assert third_exit == 0
+
+    second_report = json.loads(
+        (
+            tmp_path / "artifacts" / "reduce_sum" / "run_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    third_report = json.loads(
+        (
+            tmp_path / "artifacts" / "vector_add" / "run_report.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert second_report["memory"]["loaded_item_count"] == 0
+    assert third_report["memory"]["loaded_item_count"] >= 2
+
+
 def test_cpu_simd_pipeline_rejects_unsupported_generator_name(
     tmp_path, capsys
 ):

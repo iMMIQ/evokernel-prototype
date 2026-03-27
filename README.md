@@ -47,7 +47,7 @@ src/evokernel/
   benchmarks/     benchmark task 模型与 CPU SIMD 任务定义
   domain/         枚举、错误类型、核心 Pydantic 模型
   generator/      生成请求/结果类型、prompt builder、OpenAI 客户端
-  memory/         JSONL store 与 compact state signature
+  memory/         SQLite memory bank、embedding 检索与 compact state signature
   orchestrator/   drafting/refining episode loop 与 run-report 模型
   retrieval/      recall、epsilon-greedy policy、reward update、Q-value store
   verifier/       anti-hack、correctness、profiling、顶层 verifier
@@ -165,7 +165,7 @@ uv run python -m evokernel.cli \
   --reuse-memory
 ```
 
-启用 `--reuse-memory` 后，CLI 会从指定 work root 下的 `shared_memory.jsonl`
+启用 `--reuse-memory` 后，CLI 会从指定 work root 下的 `shared_memory.sqlite3`
 中读取已有 memory，并在 run report 中记录真正被复用的 memory ID。
 
 ## 运行产物
@@ -177,7 +177,7 @@ uv run python -m evokernel.cli \
 
 ```text
 <work-root>/
-  shared_memory.jsonl
+  shared_memory.sqlite3
   artifacts/
     vector_add/
       run_report.json
@@ -206,8 +206,12 @@ uv run python -m evokernel.cli \
   - `over_retrieval_lambda`
   - `epsilon`
   - `alpha`
+- embedding 配置：
+  - `provider`
+  - `model`
+  - `dimensions`
 - generator 配置
-- runtime 输出目录
+- runtime 输出目录与 `attempt_budget`
 - benchmark 任务列表
 
 当前默认 benchmark 集合：
@@ -223,8 +227,8 @@ uv run python -m evokernel.cli \
 
 - package import 与 CLI smoke 行为
 - config 解析与校验
-- memory 序列化与原子 JSONL 写入
-- retrieval 排序与 epsilon-greedy 选择
+- memory 持久化、Q-value 持久化与原子导出
+- dense retrieval 与 epsilon-greedy 选择
 - prompt 构建与 OpenAI-compatible HTTP 请求
 - CPU SIMD 编译、执行与 latency 测量
 - anti-hack 规则检查
@@ -245,14 +249,13 @@ uv run pytest tests/backend/test_cpu_simd_backend.py -v
 
 这是一个原型，不是完整产品。当前还有一些明确限制：
 
-- 真实 config/CLI 路径目前默认只有单次 attempt，因为 `attempt_budget` 还没有
-  暴露到 TOML 配置模型里。
-- shared memory 持久化是显式 opt-in 的：只有传 `--reuse-memory` 才会加载原有
-  `shared_memory.jsonl`。
+- shared memory 现在持久化在 SQLite 中；只有传 `--reuse-memory` 才会把历史共享
+  memory 纳入当前检索视野，但每次运行产生的新 memory 和 `Q1/Q2` 都会写回共享库。
 - `deterministic-test` 生成器路径本质上是仓库内的 dev/test 路径，不是通用生产
   generator 实现。
 - 当前只实现了 CPU SIMD backend，还没有 Ascend/CUDA 风格后端。
-- 跨任务 retrieval 仍然是轻量启发式方案，没有 embedding 或向量数据库。
+- 默认 embedding provider 仍然是本地 hashing 方案，便于离线测试；如果要接近
+  论文里的真实 dense retrieval 质量，应该在配置里切到外部 embedding 服务。
 
 ## 开发说明
 

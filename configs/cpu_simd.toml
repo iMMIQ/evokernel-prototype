@@ -4,6 +4,11 @@ over_retrieval_lambda = 3
 epsilon = 0.1
 alpha = 0.2
 
+[embedding]
+provider = "hashing"
+model = "text-embedding-3-large"
+dimensions = 256
+
 [generator]
 provider = "openai_compatible"
 model = "gpt-5.4"
@@ -13,6 +18,7 @@ api_key_env = "OPENAI_API_KEY"
 backend = "cpu_simd"
 artifact_dir = "artifacts"
 log_dir = "logs"
+attempt_budget = 3
 
 [benchmark]
 tasks = ["vector_add", "reduce_sum", "matmul_tiled", "layernorm"]

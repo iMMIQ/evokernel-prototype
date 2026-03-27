@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from evokernel.domain.models import VerificationOutcome
+from evokernel.memory.embedding import HashingTextEmbedder
 from evokernel.memory.store import InMemoryStore
 from evokernel.retrieval.q_store import QValueStore
 from evokernel.orchestrator.episode import run_episode
@@ -41,6 +42,7 @@ def _build_fake_runtime(
         generator=FakeGenerator(),
         memory_store=InMemoryStore(),
         q_store=QValueStore(),
+        embedder=HashingTextEmbedder(dimensions=32),
         verifier=verifier,
         config=SimpleNamespace(
             retrieval=SimpleNamespace(

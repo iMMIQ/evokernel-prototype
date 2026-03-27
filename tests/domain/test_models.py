@@ -54,13 +54,14 @@ def test_load_runtime_config_reads_generator_provider_fields(tmp_path):
 def test_load_runtime_config_reads_backend_benchmark_and_artifact_paths(tmp_path):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        "[runtime]\nbackend=\"cpu_simd\"\nartifact_dir=\"artifacts\"\nlog_dir=\"logs\"\n[benchmark]\ntasks=[\"vector_add\", \"reduce_sum\"]\n",
+        "[runtime]\nbackend=\"cpu_simd\"\nartifact_dir=\"artifacts\"\nlog_dir=\"logs\"\nattempt_budget=5\n[benchmark]\ntasks=[\"vector_add\", \"reduce_sum\"]\n",
         encoding="utf-8",
     )
 
     config = load_runtime_config(config_path)
 
     assert config.runtime.backend == "cpu_simd"
+    assert config.runtime.attempt_budget == 5
     assert config.benchmark.tasks == ["vector_add", "reduce_sum"]
 
 
@@ -68,6 +69,19 @@ def test_default_config_uses_layernorm_in_initial_benchmark():
     config = load_runtime_config("configs/default.toml")
 
     assert "layernorm" in config.benchmark.tasks
+
+
+def test_load_runtime_config_reads_embedding_provider_fields(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[embedding]\nprovider=\"hashing\"\nmodel=\"text-embedding-3-large\"\ndimensions=128\n",
+        encoding="utf-8",
+    )
+
+    config = load_runtime_config(config_path)
+
+    assert config.embedding.provider == "hashing"
+    assert config.embedding.dimensions == 128
 
 
 def test_load_runtime_config_wraps_invalid_typed_values(tmp_path):

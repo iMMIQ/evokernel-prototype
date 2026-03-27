@@ -30,6 +30,7 @@ def memory_items() -> list[MemoryItem]:
             is_feasible=True,
             became_start_point=True,
             verifier_outcome=outcome,
+            embedding=[1.0, 0.0],
         ),
         MemoryItem(
             memory_id="second-id",
@@ -43,6 +44,7 @@ def memory_items() -> list[MemoryItem]:
             is_feasible=True,
             became_start_point=False,
             verifier_outcome=outcome,
+            embedding=[0.8, 0.2],
         ),
         MemoryItem(
             memory_id="third-id",
@@ -56,6 +58,7 @@ def memory_items() -> list[MemoryItem]:
             is_feasible=True,
             became_start_point=False,
             verifier_outcome=outcome,
+            embedding=[0.2, 0.8],
         ),
         MemoryItem(
             memory_id="fourth-id",
@@ -69,83 +72,27 @@ def memory_items() -> list[MemoryItem]:
             is_feasible=True,
             became_start_point=False,
             verifier_outcome=outcome,
-        ),
-        MemoryItem(
-            memory_id="fifth-id",
-            task_id="vector_add",
-            backend_id="cuda",
-            operator_family="elementwise",
-            stage=Stage.DRAFTING,
-            code="void fifth();",
-            summary="fifth",
-            reward=0.1,
-            is_feasible=True,
-            became_start_point=False,
-            verifier_outcome=outcome,
-        ),
-        MemoryItem(
-            memory_id="sixth-id",
-            task_id="vector_add",
-            backend_id="cpu_simd",
-            operator_family="reduction",
-            stage=Stage.DRAFTING,
-            code="void sixth();",
-            summary="sixth",
-            reward=-0.1,
-            is_feasible=False,
-            became_start_point=False,
-            verifier_outcome=VerificationOutcome(
-                anti_hack_passed=True,
-                compile_passed=True,
-                correctness_passed=False,
-                latency_ms=None,
-                error_category="wrong_answer",
-                feedback_summary="bad",
-            ),
+            embedding=[0.0, 1.0],
         ),
     ]
 
 
 def test_recall_candidates_limits_pool_by_lambda_times_n(memory_items):
-    overflow_item = MemoryItem(
-        memory_id="overflow-id",
-        task_id="vector_add",
-        backend_id="cuda",
-        operator_family="reduction",
-        stage=Stage.REFINING,
-        code="void overflow();",
-        summary="overflow",
-        reward=-0.5,
-        is_feasible=False,
-        became_start_point=False,
-        verifier_outcome=VerificationOutcome(
-            anti_hack_passed=True,
-            compile_passed=False,
-            correctness_passed=False,
-            latency_ms=None,
-            error_category="compile_error",
-            feedback_summary="overflow",
-        ),
-    )
     recalled = recall_candidates(
-        items=[*memory_items, overflow_item],
-        operator_family="elementwise",
-        backend_id="cpu_simd",
-        stage=Stage.DRAFTING,
+        items=memory_items,
+        query_embedding=[1.0, 0.0],
         final_context_count=2,
-        over_retrieval_lambda=3,
+        over_retrieval_lambda=2,
     )
     assert [item.memory_id for item in recalled] == [
         "best-id",
         "second-id",
-        "fourth-id",
         "third-id",
-        "sixth-id",
-        "fifth-id",
+        "fourth-id",
     ]
 
 
-def test_recall_candidates_prefers_backend_and_stage_matches_before_reward():
+def test_recall_candidates_uses_reward_and_memory_id_as_tie_breakers():
     outcome = VerificationOutcome(
         anti_hack_passed=True,
         compile_passed=True,
@@ -155,86 +102,6 @@ def test_recall_candidates_prefers_backend_and_stage_matches_before_reward():
         feedback_summary="ok",
     )
     items = [
-        MemoryItem(
-            memory_id="target-match",
-            task_id="vector_add",
-            backend_id="cpu_simd",
-            operator_family="elementwise",
-            stage=Stage.DRAFTING,
-            code="void target_match();",
-            summary="target-match",
-            reward=0.1,
-            is_feasible=True,
-            became_start_point=False,
-            verifier_outcome=outcome,
-        ),
-        MemoryItem(
-            memory_id="wrong-stage",
-            task_id="vector_add",
-            backend_id="cpu_simd",
-            operator_family="elementwise",
-            stage=Stage.REFINING,
-            code="void wrong_stage();",
-            summary="wrong-stage",
-            reward=0.8,
-            is_feasible=True,
-            became_start_point=False,
-            verifier_outcome=outcome,
-        ),
-        MemoryItem(
-            memory_id="wrong-backend",
-            task_id="vector_add",
-            backend_id="cuda",
-            operator_family="elementwise",
-            stage=Stage.DRAFTING,
-            code="void wrong_backend();",
-            summary="wrong-backend",
-            reward=0.9,
-            is_feasible=True,
-            became_start_point=False,
-            verifier_outcome=outcome,
-        ),
-    ]
-
-    recalled = recall_candidates(
-        items=items,
-        backend_id="cpu_simd",
-        operator_family="elementwise",
-        stage=Stage.DRAFTING,
-        final_context_count=2,
-        over_retrieval_lambda=2,
-    )
-
-    assert [item.summary for item in recalled[:3]] == [
-        "target-match",
-        "wrong-stage",
-        "wrong-backend",
-    ]
-
-
-def test_recall_candidates_uses_memory_id_not_summary_as_final_tie_break():
-    outcome = VerificationOutcome(
-        anti_hack_passed=True,
-        compile_passed=True,
-        correctness_passed=True,
-        latency_ms=1.0,
-        error_category=None,
-        feedback_summary="ok",
-    )
-    items = [
-        MemoryItem(
-            memory_id="a-id",
-            task_id="vector_add",
-            backend_id="cpu_simd",
-            operator_family="elementwise",
-            stage=Stage.DRAFTING,
-            code="void a();",
-            summary="zzz-summary",
-            reward=0.5,
-            is_feasible=True,
-            became_start_point=False,
-            verifier_outcome=outcome,
-        ),
         MemoryItem(
             memory_id="z-id",
             task_id="vector_add",
@@ -242,19 +109,32 @@ def test_recall_candidates_uses_memory_id_not_summary_as_final_tie_break():
             operator_family="elementwise",
             stage=Stage.DRAFTING,
             code="void z();",
-            summary="aaa-summary",
+            summary="z",
             reward=0.5,
             is_feasible=True,
             became_start_point=False,
             verifier_outcome=outcome,
+            embedding=[1.0, 0.0],
+        ),
+        MemoryItem(
+            memory_id="a-id",
+            task_id="vector_add",
+            backend_id="cpu_simd",
+            operator_family="elementwise",
+            stage=Stage.DRAFTING,
+            code="void a();",
+            summary="a",
+            reward=0.5,
+            is_feasible=True,
+            became_start_point=False,
+            verifier_outcome=outcome,
+            embedding=[1.0, 0.0],
         ),
     ]
 
     recalled = recall_candidates(
         items=items,
-        operator_family="elementwise",
-        backend_id="cpu_simd",
-        stage=Stage.DRAFTING,
+        query_embedding=[1.0, 0.0],
         final_context_count=2,
         over_retrieval_lambda=1,
     )

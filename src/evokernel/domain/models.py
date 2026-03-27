@@ -63,6 +63,8 @@ class MemoryItem(BaseModel):
     became_start_point: bool
     verifier_outcome: VerificationOutcome
     parent_attempt_id: str | None = None
+    retrieval_text: str | None = None
+    embedding: list[float] = Field(default_factory=list, exclude=True)
 
     @model_validator(mode="after")
     def validate_feasibility(self) -> "MemoryItem":
