@@ -39,12 +39,14 @@ def build_generation_prompt(
     task_summary: str,
     backend_constraints: list[str],
     retrieved_context: list[str],
+    api_knowledge_context: list[str] | None = None,
     feedback_summary: str | None = None,
 ) -> str:
     sections = [
         f"Stage: {stage}",
         "Task Summary:\n" + task_summary.strip(),
         _format_list("Backend Constraints", backend_constraints),
+        _format_list("API Knowledge", api_knowledge_context or []),
         _format_list("Retrieved Context", retrieved_context),
     ]
     if feedback_summary:
@@ -60,6 +62,7 @@ def build_prompts(request: GenerationRequest) -> tuple[str, str]:
             task_summary=request.task_summary,
             backend_constraints=request.backend_constraints,
             retrieved_context=request.retrieved_context,
+            api_knowledge_context=request.api_knowledge_context,
             feedback_summary=request.feedback_summary,
         ),
     )

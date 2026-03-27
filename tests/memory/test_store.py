@@ -2,6 +2,7 @@ import pytest
 
 from evokernel.domain.enums import Stage
 from evokernel.domain.models import MemoryItem, VerificationOutcome
+from evokernel.memory.seeds import ingest_seed_memory
 from evokernel.memory.state_signature import build_state_signature
 from evokernel.memory.store import InMemoryStore
 from evokernel.retrieval.q_store import QValueStore
@@ -230,3 +231,43 @@ def test_q_value_store_rejects_unsupported_stage():
 
     with pytest.raises(ValueError, match="Unsupported stage"):
         store.get(stage="unsupported", state_signature="state", memory_id="m1")
+
+
+def test_ingest_seed_memory_persists_backend_knowledge_and_hints(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    store = InMemoryStore(path, reuse_existing=False)
+
+    memory_ids = ingest_seed_memory(
+        store,
+        backend_id="cpu_simd",
+        backend_constraints=["Expose evokernel_entry."],
+    )
+
+    visible_items = store.recall(backend_id="cpu_simd")
+
+    assert memory_ids
+    assert any(item.memory_kind == "backend_knowledge" for item in visible_items)
+    assert any(item.memory_kind == "refinement_hint" for item in visible_items)
+    store.close()
+
+
+def test_ingest_seed_memory_is_idempotent_for_stable_seed_ids(tmp_path):
+    path = tmp_path / "memory.sqlite3"
+    store = InMemoryStore(path)
+
+    first_ids = ingest_seed_memory(
+        store,
+        backend_id="cpu_simd",
+        backend_constraints=["Expose evokernel_entry."],
+    )
+    second_ids = ingest_seed_memory(
+        store,
+        backend_id="cpu_simd",
+        backend_constraints=["Expose evokernel_entry."],
+    )
+
+    persisted = store.recall(task_id="__seed__", backend_id="cpu_simd")
+
+    assert first_ids == second_ids
+    assert len(persisted) == len(first_ids)
+    store.close()

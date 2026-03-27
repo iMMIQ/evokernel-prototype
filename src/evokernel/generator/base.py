@@ -8,6 +8,7 @@ class GenerationRequest:
     task_summary: str
     backend_constraints: list[str] = field(default_factory=list)
     retrieved_context: list[str] = field(default_factory=list)
+    api_knowledge_context: list[str] = field(default_factory=list)
     feedback_summary: str | None = None
 
 

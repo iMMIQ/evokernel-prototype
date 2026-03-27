@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import log, sqrt, tanh
+import re
 
 from evokernel.benchmarks.task_registry import get_benchmark_task
 from evokernel.domain.enums import Stage
@@ -38,6 +39,12 @@ class _OnlineRewardNormalizer:
         return (value - self.mean) / sqrt(variance)
 
 
+@dataclass(slots=True)
+class _ContextSelection:
+    experiential_items: list[MemoryItem]
+    api_knowledge_items: list[MemoryItem]
+
+
 def run_episode(runtime, task_id: str) -> RunReport:
     task = get_benchmark_task(task_id)
     attempt_budget = runtime.config.runtime.attempt_budget
@@ -64,7 +71,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
             task=task,
             state_signature=state_signature,
         ) if stage == Stage.REFINING else None
-        selected_context = _select_context(
+        context_selection = _select_context(
             runtime=runtime,
             task=task,
             stage=stage,
@@ -76,7 +83,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
         )
 
         retrieved_context = _build_retrieved_context(
-            selected_context=selected_context,
+            selected_context=context_selection.experiential_items,
             start_point=start_point,
         )
         request = GenerationRequest(
@@ -84,6 +91,9 @@ def run_episode(runtime, task_id: str) -> RunReport:
             task_summary=task.summary,
             backend_constraints=_get_backend_constraints(runtime, task),
             retrieved_context=retrieved_context,
+            api_knowledge_context=_build_api_knowledge_context(
+                context_selection.api_knowledge_items
+            ),
             feedback_summary=last_feedback,
         )
         generation = runtime.generator.generate(request)
@@ -114,7 +124,11 @@ def run_episode(runtime, task_id: str) -> RunReport:
                     reward=reward,
                     latency_ms=verifier_outcome.latency_ms,
                 ),
-                context_summary=_build_context_summary(selected_context, start_point),
+                context_summary=_build_context_summary(
+                    experiential_context=context_selection.experiential_items,
+                    api_knowledge_context=context_selection.api_knowledge_items,
+                    start_point=start_point,
+                ),
                 reward=reward,
                 is_feasible=verifier_outcome.is_feasible,
                 became_start_point=verifier_outcome.is_feasible,
@@ -133,7 +147,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
             stage=stage,
             state_signature=state_signature,
             reward=reward,
-            selected_context=selected_context,
+            selected_context=context_selection.experiential_items,
             start_point=start_point,
             produced_item=memory_item,
         )
@@ -145,7 +159,13 @@ def run_episode(runtime, task_id: str) -> RunReport:
                 stage=stage,
                 reward=reward,
                 verifier_outcome=verifier_outcome,
-                selected_context_ids=[item.memory_id for item in selected_context],
+                selected_context_ids=[
+                    item.memory_id
+                    for item in (
+                        context_selection.experiential_items
+                        + context_selection.api_knowledge_items
+                    )
+                ],
                 start_point_id=(
                     start_point.memory_id if start_point is not None else None
                 ),
@@ -174,6 +194,43 @@ def _select_context(
     error_category: str | None,
     feedback_summary: str | None,
     start_point: MemoryItem | None,
+) -> _ContextSelection:
+    experiential_items = _select_experiential_context(
+        runtime=runtime,
+        task=task,
+        stage=stage,
+        state_signature=state_signature,
+        shape_bucket=shape_bucket,
+        error_category=error_category,
+        feedback_summary=feedback_summary,
+        start_point=start_point,
+    )
+    api_knowledge_items: list[MemoryItem] = []
+    if stage == Stage.DRAFTING:
+        api_knowledge_items = _select_api_knowledge_context(
+            runtime=runtime,
+            task=task,
+            stage=stage,
+            shape_bucket=shape_bucket,
+            error_category=error_category,
+            feedback_summary=feedback_summary,
+            experiential_items=experiential_items,
+        )
+    return _ContextSelection(
+        experiential_items=experiential_items,
+        api_knowledge_items=api_knowledge_items,
+    )
+
+
+def _select_experiential_context(
+    runtime,
+    task,
+    stage: Stage,
+    state_signature: str,
+    shape_bucket: str,
+    error_category: str | None,
+    feedback_summary: str | None,
+    start_point: MemoryItem | None,
 ) -> list[MemoryItem]:
     retrieval_config = runtime.config.retrieval
     query_text = build_retrieval_query(
@@ -189,15 +246,20 @@ def _select_context(
         start_point=start_point,
     )
     query_embedding = runtime.embedder.embed_texts([query_text])[0]
-    recalled = recall_candidates(
-        items=runtime.memory_store.recall(
+    recalled_items = [
+        item
+        for item in runtime.memory_store.recall(
             backend_id=runtime.backend_id,
             exclude_memory_ids=(
                 {start_point.memory_id}
                 if start_point is not None
                 else None
             ),
-        ),
+        )
+        if item.memory_kind != "backend_knowledge"
+    ]
+    recalled = recall_candidates(
+        items=recalled_items,
         query_embedding=query_embedding,
         final_context_count=retrieval_config.final_context_count,
         over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
@@ -210,6 +272,58 @@ def _select_context(
         final_context_count=retrieval_config.final_context_count,
         epsilon=retrieval_config.epsilon,
     )
+
+
+def _select_api_knowledge_context(
+    runtime,
+    task,
+    stage: Stage,
+    shape_bucket: str,
+    error_category: str | None,
+    feedback_summary: str | None,
+    experiential_items: list[MemoryItem],
+) -> list[MemoryItem]:
+    retrieval_config = runtime.config.retrieval
+    api_budget = max(1, min(2, retrieval_config.final_context_count))
+    query_text = build_retrieval_query(
+        backend_id=runtime.backend_id,
+        task_id=task.task_id,
+        operator_family=task.operator_family,
+        task_summary=task.summary,
+        stage=stage,
+        shape_bucket=shape_bucket,
+        keywords=list(task.prompt_metadata.get("keywords", [])),
+        error_category=error_category,
+        feedback_summary=feedback_summary,
+        start_point=None,
+    )
+    query_embedding = runtime.embedder.embed_texts([query_text])[0]
+    candidates = runtime.memory_store.recall(
+        backend_id=runtime.backend_id,
+        memory_kind="backend_knowledge",
+    )
+    recalled = recall_candidates(
+        items=candidates,
+        query_embedding=query_embedding,
+        final_context_count=api_budget,
+        over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
+    )
+    exact_names = _extract_api_terms(
+        task=task,
+        experiential_items=experiential_items,
+    )
+    indexed_recalled = {item.memory_id: index for index, item in enumerate(recalled)}
+    ranked = sorted(
+        recalled,
+        key=lambda item: (
+            _is_static_infrastructure_bundle(item),
+            _count_exact_name_hits(item, exact_names),
+            _count_task_keyword_hits(item, task),
+            -indexed_recalled[item.memory_id],
+        ),
+        reverse=True,
+    )
+    return ranked[:api_budget]
 
 
 def _select_start_point(runtime, task, state_signature: str) -> MemoryItem | None:
@@ -352,20 +466,38 @@ def _build_retrieved_context(
     return retrieved_context
 
 
+def _build_api_knowledge_context(items: list[MemoryItem]) -> list[str]:
+    return [
+        (
+            "Knowledge:\n"
+            f"memory_id={item.memory_id}\n"
+            f"summary={item.summary}\n"
+            f"snippet={item.code}"
+        )
+        for item in items
+    ]
+
+
 def _build_context_summary(
-    selected_context: list[MemoryItem],
+    experiential_context: list[MemoryItem],
+    api_knowledge_context: list[MemoryItem],
     start_point: MemoryItem | None,
 ) -> str | None:
     parts: list[str] = []
     if start_point is not None:
         parts.append(f"start_point={start_point.memory_id}")
-    if selected_context:
+    if experiential_context:
         parts.append(
-            "context=" + ",".join(item.memory_id for item in selected_context)
+            "context=" + ",".join(item.memory_id for item in experiential_context)
+        )
+    if api_knowledge_context:
+        parts.append(
+            "api_knowledge="
+            + ",".join(item.memory_id for item in api_knowledge_context)
         )
     if not parts:
         return None
-    return " ".join(parts)
+    return " | ".join(parts)
 
 
 def _build_attempt_summary(
@@ -396,6 +528,37 @@ def _is_better_candidate(
     if candidate_latency is None:
         return False
     return candidate_latency < current_latency
+
+
+def _extract_api_terms(task, experiential_items: list[MemoryItem]) -> set[str]:
+    terms = set(task.prompt_metadata.get("preferred_intrinsics", []))
+    terms.update(task.prompt_metadata.get("keywords", []))
+    for item in experiential_items:
+        terms.update(
+            re.findall(
+                r"__\w+|_mm\w+|immintrin\.h|xmmintrin\.h|emmintrin\.h|vld1q_f32",
+                item.code,
+            )
+        )
+    return {term.lower() for term in terms if term}
+
+
+def _is_static_infrastructure_bundle(item: MemoryItem) -> bool:
+    return ":core:" in item.memory_id
+
+
+def _count_exact_name_hits(item: MemoryItem, exact_names: set[str]) -> int:
+    haystack = f"{item.summary}\n{item.code}\n{item.retrieval_text or ''}".lower()
+    return sum(1 for term in exact_names if term in haystack)
+
+
+def _count_task_keyword_hits(item: MemoryItem, task) -> int:
+    haystack = f"{item.summary}\n{item.retrieval_text or ''}".lower()
+    keywords = [
+        task.operator_family,
+        *task.prompt_metadata.get("keywords", []),
+    ]
+    return sum(1 for keyword in keywords if keyword.lower() in haystack)
 
 
 def _build_shape_bucket(task) -> str:

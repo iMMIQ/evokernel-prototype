@@ -24,7 +24,7 @@ Approach with Application to NPU Kernel Synthesis* 中 EvoKernel 工作流的核
 
 - 基于 `uv` 的 Python 项目骨架
 - 带校验的配置加载
-- memory store、state signature、recall policy、Q-value 更新
+- memory store、seed knowledge 注入、state signature、recall policy、Q-value 更新
 - OpenAI-compatible 生成器客户端与 prompt builder
 - CPU SIMD backend 协议与 benchmark task 注册表
 - anti-hack、correctness、compile/runtime error、latency 聚合等 verifier
@@ -79,12 +79,13 @@ tests/
    输出 `VerificationOutcome`。
 
 4. `memory` 与 `retrieval`
-   负责持久化历史尝试、构造紧凑 state signature、召回候选记忆，并更新
-   `Q1` / `Q2`。
+   负责持久化历史尝试、注入 backend seed knowledge、构造紧凑 state signature、
+   召回候选记忆，并更新 `Q1` / `Q2`。
 
 5. `orchestrator`
    驱动完整的 episode：
-   - drafting：先找到第一个可行解
+   - drafting：先找到第一个可行解；经验记忆走 value-driven 检索，API knowledge
+     走单独的 backend-aware 通道
    - refining：从可行起点继续优化
    - reward 更新与 run-report 生成
 
@@ -168,6 +169,10 @@ uv run python -m evokernel.cli \
 启用 `--reuse-memory` 后，CLI 会从指定 work root 下的 `shared_memory.sqlite3`
 中读取已有 memory，并在 run report 中记录真正被复用的 memory ID。
 
+无论是否启用 `--reuse-memory`，CLI 启动时都会把当前 backend 的 seed knowledge
+写入 shared memory，并把这些 seed 项纳入当前运行可见的检索范围；`--reuse-memory`
+只影响历史运行产生的共享经验是否参与当前检索。
+
 ## 运行产物
 
 默认情况下，CLI 会把运行结果写到 `.evokernel/` 下；也可以通过 `--work-root`
@@ -228,7 +233,7 @@ uv run python -m evokernel.cli \
 - package import 与 CLI smoke 行为
 - config 解析与校验
 - memory 持久化、Q-value 持久化与原子导出
-- dense retrieval 与 epsilon-greedy 选择
+- dense retrieval、hybrid drafting retrieval 与 epsilon-greedy 选择
 - prompt 构建与 OpenAI-compatible HTTP 请求
 - CPU SIMD 编译、执行与 latency 测量
 - anti-hack 规则检查
@@ -251,6 +256,8 @@ uv run pytest tests/backend/test_cpu_simd_backend.py -v
 
 - shared memory 现在持久化在 SQLite 中；只有传 `--reuse-memory` 才会把历史共享
   memory 纳入当前检索视野，但每次运行产生的新 memory 和 `Q1/Q2` 都会写回共享库。
+- 当前已经有 `M0` 风格的 typed seed knowledge 与 drafting 阶段的 hybrid retrieval，
+  但仍然是轻量实现：API knowledge 主要来自仓库内置 seed bundle，而不是外部文档管线。
 - `deterministic-test` 生成器路径本质上是仓库内的 dev/test 路径，不是通用生产
   generator 实现。
 - 当前只实现了 CPU SIMD backend，还没有 Ascend/CUDA 风格后端。

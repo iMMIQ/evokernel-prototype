@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from evokernel.domain.models import VerificationOutcome
+from evokernel.domain.enums import Stage
+from evokernel.domain.models import MemoryItem, VerificationOutcome
 from evokernel.memory.embedding import HashingTextEmbedder
+from evokernel.memory.seeds import ingest_seed_memory
 from evokernel.memory.store import InMemoryStore
 from evokernel.retrieval.q_store import QValueStore
 from evokernel.orchestrator.episode import run_episode
@@ -203,3 +205,66 @@ def test_run_episode_handles_zero_latency_refinement_rewards():
 
     assert report.best_candidate is not None
     assert report.best_candidate.verifier_outcome.latency_ms == 0.0
+
+
+def test_run_episode_separates_api_knowledge_from_experiential_context():
+    runtime = _build_fake_runtime(
+        {
+            "draft-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=2.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+            "refine-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        },
+        attempt_budget=2,
+    )
+    ingest_seed_memory(
+        runtime.memory_store,
+        backend_id="cpu_simd",
+        backend_constraints=["Expose evokernel_entry."],
+    )
+    runtime.memory_store.add(_build_runtime_memory_item("history"))
+
+    report = run_episode(runtime, task_id="vector_add")
+
+    first_request = runtime.generator.calls[0]
+
+    assert report.attempts[0].stage == "drafting"
+    assert first_request.api_knowledge_context
+    assert first_request.retrieved_context
+    assert "API Knowledge" not in "\n".join(first_request.retrieved_context)
+
+
+def _build_runtime_memory_item(memory_id: str):
+    return MemoryItem(
+        memory_id=memory_id,
+        task_id="vector_add",
+        backend_id="cpu_simd",
+        operator_family="elementwise",
+        stage=Stage.DRAFTING,
+        code="#include <immintrin.h>\nvoid evokernel_entry() {}",
+        summary="historical compile fix with __m256 and tail cleanup",
+        memory_kind="failure_summary",
+        reward=0.25,
+        is_feasible=False,
+        became_start_point=False,
+        verifier_outcome=VerificationOutcome(
+            anti_hack_passed=True,
+            compile_passed=True,
+            correctness_passed=False,
+            latency_ms=None,
+            error_category="wrong_answer",
+            feedback_summary="tail cleanup missing",
+        ),
+    )

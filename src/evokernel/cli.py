@@ -12,6 +12,7 @@ from evokernel.backend.cpu_simd import CpuSimdBackend
 from evokernel.config import AppConfig, load_runtime_config
 from evokernel.generator.openai_compatible import OpenAICompatibleGenerator
 from evokernel.memory.embedding import build_text_embedder
+from evokernel.memory.seeds import ingest_seed_memory
 from evokernel.memory.store import InMemoryStore
 from evokernel.orchestrator.episode import run_episode
 from evokernel.retrieval.q_store import QValueStore
@@ -67,6 +68,11 @@ def _build_runtime(
         reuse_existing=args.reuse_memory,
     )
     backend = CpuSimdBackend(work_root=artifact_dir)
+    ingest_seed_memory(
+        memory_store,
+        backend_id=config.runtime.backend,
+        backend_constraints=backend.prompt_constraints(),
+    )
 
     runtime = SimpleNamespace(
         backend=backend,
