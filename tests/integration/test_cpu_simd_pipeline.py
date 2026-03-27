@@ -2,11 +2,64 @@ from __future__ import annotations
 
 import json
 
+import evokernel.cli as cli_module
 from evokernel.cli import main
+from evokernel.generator.base import GenerationRequest, GenerationResult
+
+
+class _DeterministicTestGenerator:
+    _VECTOR_ADD_CODE = """
+#include <cstddef>
+
+// fixture deterministic vector_add
+extern "C" void evokernel_entry(
+    float* out,
+    const float* a,
+    const float* b,
+    std::size_t n
+) {
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = a[i] + b[i];
+    }
+}
+""".strip()
+
+    _REDUCE_SUM_CODE = """
+#include <cstddef>
+
+// fixture deterministic reduce_sum
+extern "C" void evokernel_entry(
+    float* out,
+    const float* x,
+    std::size_t n
+) {
+    float sum = 0.0f;
+    for (std::size_t i = 0; i < n; ++i) {
+        sum += x[i];
+    }
+    out[0] = sum;
+}
+""".strip()
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        task_summary = request.task_summary.lower()
+        if "add two float32 vectors" in task_summary:
+            return GenerationResult(code=self._VECTOR_ADD_CODE)
+        if "reduce a float32 vector to a scalar sum" in task_summary:
+            return GenerationResult(code=self._REDUCE_SUM_CODE)
+        raise ValueError(request.task_summary)
+
+
+def _install_deterministic_generator_override(monkeypatch) -> None:
+    monkeypatch.setitem(
+        cli_module.GENERATOR_OVERRIDES,
+        "deterministic-test",
+        lambda _config: _DeterministicTestGenerator(),
+    )
 
 
 def test_cpu_simd_pipeline_runs_vector_add(tmp_path, monkeypatch):
-    _ = monkeypatch
+    _install_deterministic_generator_override(monkeypatch)
 
     exit_code = main(
         [
@@ -30,10 +83,18 @@ def test_cpu_simd_pipeline_runs_vector_add(tmp_path, monkeypatch):
     )
     assert report["task_id"] == "vector_add"
     assert report["best_candidate"] is not None
+    candidate_code = (
+        tmp_path
+        / "artifacts"
+        / "vector_add"
+        / "vector_add-1"
+        / "candidate.cpp"
+    ).read_text(encoding="utf-8")
+    assert "fixture deterministic vector_add" in candidate_code
 
 
 def test_cpu_simd_pipeline_reuses_memory_across_two_tasks(tmp_path, monkeypatch):
-    _ = monkeypatch
+    _install_deterministic_generator_override(monkeypatch)
 
     first_exit = main(
         [

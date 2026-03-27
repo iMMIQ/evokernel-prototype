@@ -3,59 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 from evokernel.backend.cpu_simd import CpuSimdBackend
 from evokernel.config import AppConfig, load_runtime_config
-from evokernel.generator.base import GenerationRequest, GenerationResult
 from evokernel.generator.openai_compatible import OpenAICompatibleGenerator
 from evokernel.memory.store import InMemoryStore
 from evokernel.orchestrator.episode import run_episode
 from evokernel.retrieval.q_store import QValueStore
 
-
-class _DeterministicTestGenerator:
-    _VECTOR_ADD_CODE = """
-#include <cstddef>
-
-extern "C" void evokernel_entry(
-    float* out,
-    const float* a,
-    const float* b,
-    std::size_t n
-) {
-    for (std::size_t i = 0; i < n; ++i) {
-        out[i] = a[i] + b[i];
-    }
-}
-""".strip()
-
-    _REDUCE_SUM_CODE = """
-#include <cstddef>
-
-extern "C" void evokernel_entry(
-    float* out,
-    const float* x,
-    std::size_t n
-) {
-    float sum = 0.0f;
-    for (std::size_t i = 0; i < n; ++i) {
-        sum += x[i];
-    }
-    out[0] = sum;
-}
-""".strip()
-
-    def generate(self, request: GenerationRequest) -> GenerationResult:
-        task_summary = request.task_summary.lower()
-        if "add two float32 vectors" in task_summary:
-            return GenerationResult(code=self._VECTOR_ADD_CODE)
-        if "reduce a float32 vector to a scalar sum" in task_summary:
-            return GenerationResult(code=self._REDUCE_SUM_CODE)
-        raise ValueError(
-            f"deterministic-test generator does not support task summary: {request.task_summary}"
-        )
+GENERATOR_OVERRIDES: dict[str, Callable[[AppConfig], object] | object] = {}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,7 +83,13 @@ def _build_generator(
     config: AppConfig,
 ):
     if generator_name == "deterministic-test":
-        return _DeterministicTestGenerator()
+        try:
+            override = GENERATOR_OVERRIDES[generator_name]
+        except KeyError as exc:
+            raise ValueError(
+                "generator override required for deterministic-test"
+            ) from exc
+        return override(config) if callable(override) else override
     return OpenAICompatibleGenerator.from_config(config.generator)
 
 
