@@ -51,6 +51,16 @@ def verify_candidate(
         )
 
     all_cases = [*task.randomized_inputs, *task.edge_case_inputs]
+    if not all_cases:
+        return VerificationOutcome(
+            anti_hack_passed=True,
+            compile_passed=True,
+            correctness_passed=False,
+            latency_ms=None,
+            error_category="missing_correctness_cases",
+            feedback_summary="task defines no correctness cases",
+        )
+
     for case_index, case in enumerate(all_cases, start=1):
         try:
             result = backend.run_reference_case(artifact=artifact, case=case)

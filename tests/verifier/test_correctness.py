@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 
 from evokernel.backend.base import CompilationResult, ReferenceExecutionResult
+from evokernel.benchmarks.models import BenchmarkTask, BenchmarkTolerances
 from evokernel.benchmarks.cpu_simd_tasks import build_vector_add_task
 from evokernel.verifier.correctness import compare_outputs
 from evokernel.verifier.core import verify_candidate
@@ -126,3 +127,57 @@ def test_verify_candidate_checks_all_cases_and_fails_on_first_mismatch():
     assert outcome.error_category == "wrong_answer"
     assert len(backend.cases_run) == 2
     assert "case 2" in outcome.feedback_summary
+
+
+@dataclass(slots=True)
+class _NoCaseBackend:
+    measured_latency: bool = False
+
+    def materialize_candidate(self, task, candidate_code, attempt_id):
+        return type("Artifact", (), {"task": task})()
+
+    def compile(self, artifact):
+        return CompilationResult(
+            command=["clang", "candidate.cpp"],
+            returncode=0,
+            stdout="",
+            stderr="",
+            binary_path=Path("candidate.so"),
+        )
+
+    def run_reference_case(self, artifact, case):
+        raise AssertionError("no-case tasks must not execute correctness runs")
+
+    def measure_latency(self, artifact, case, warmup_runs, timed_runs):
+        self.measured_latency = True
+        raise AssertionError("no-case tasks must not be profiled")
+
+    def extract_structured_error(self, stderr):
+        return None
+
+
+def test_verify_candidate_fails_when_task_has_no_correctness_cases():
+    backend = _NoCaseBackend()
+    task = BenchmarkTask(
+        task_id="no_cases",
+        operator_family="test",
+        summary="Task without correctness cases.",
+        reference_impl=lambda: np.asarray(0.0, dtype=np.float32),
+        randomized_inputs=[],
+        edge_case_inputs=[],
+        tolerances=BenchmarkTolerances(atol=1e-6, rtol=1e-6),
+    )
+
+    outcome = verify_candidate(
+        backend=backend,
+        task=task,
+        candidate_code='extern "C" void evokernel_entry() {}',
+        attempt_id="attempt-no-cases",
+    )
+
+    assert outcome.anti_hack_passed is True
+    assert outcome.compile_passed is True
+    assert outcome.correctness_passed is False
+    assert outcome.error_category == "missing_correctness_cases"
+    assert "no correctness cases" in outcome.feedback_summary
+    assert backend.measured_latency is False

@@ -14,7 +14,8 @@ class AntiHackResult:
 _DISALLOWED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
-            r"\bimport\s+numpy(?:\s+as\s+np)?\b|\bfrom\s+numpy\s+import\b"
+            r"\bimport\s+numpy(?:\.\w+)*(?:\s+as\s+\w+)?\b|"
+            r"\bfrom\s+numpy(?:\.\w+)*\s+import\b"
         ),
         "numpy imports are disallowed in candidate code",
     ),
@@ -25,7 +26,10 @@ _DISALLOWED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "numpy shortcut operations are disallowed in candidate code",
     ),
     (
-        re.compile(r"\bimport\s+(?:torch|jax|cupy)\b|\bfrom\s+(?:torch|jax|cupy)\s+import\b"),
+        re.compile(
+            r"\bimport\s+(?:torch|jax|cupy)(?:\.\w+)*(?:\s+as\s+\w+)?\b|"
+            r"\bfrom\s+(?:torch|jax|cupy)(?:\.\w+)*\s+import\b"
+        ),
         "external tensor library imports are disallowed in candidate code",
     ),
 )

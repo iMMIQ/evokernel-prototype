@@ -19,6 +19,22 @@ def test_anti_hack_rejects_unaliased_numpy_shortcuts():
     assert result.error_category == "anti_hack"
 
 
+def test_anti_hack_rejects_numpy_submodule_imports():
+    result = check_for_disallowed_patterns("from numpy.linalg import norm")
+
+    assert result.passed is False
+    assert result.error_category == "anti_hack"
+
+
+def test_anti_hack_rejects_tensor_library_submodule_imports():
+    result = check_for_disallowed_patterns(
+        "from torch.nn import functional as F"
+    )
+
+    assert result.passed is False
+    assert result.error_category == "anti_hack"
+
+
 def test_anti_hack_allows_plain_candidate_code():
     result = check_for_disallowed_patterns(
         'extern "C" void evokernel_entry() {}'
