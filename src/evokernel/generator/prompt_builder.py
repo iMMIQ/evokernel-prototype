@@ -40,6 +40,7 @@ def build_generation_prompt(
     backend_constraints: list[str],
     retrieved_context: list[str],
     api_knowledge_context: list[str] | None = None,
+    profiler_summary: str | None = None,
     feedback_summary: str | None = None,
 ) -> str:
     sections = [
@@ -49,6 +50,8 @@ def build_generation_prompt(
         _format_list("API Knowledge", api_knowledge_context or []),
         _format_list("Retrieved Context", retrieved_context),
     ]
+    if profiler_summary:
+        sections.append("Profiler Diagnosis:\n" + profiler_summary.strip())
     if feedback_summary:
         sections.append("Verifier Feedback:\n" + feedback_summary.strip())
     return "\n\n".join(section for section in sections if section)
@@ -63,6 +66,7 @@ def build_prompts(request: GenerationRequest) -> tuple[str, str]:
             backend_constraints=request.backend_constraints,
             retrieved_context=request.retrieved_context,
             api_knowledge_context=request.api_knowledge_context,
+            profiler_summary=request.profiler_summary,
             feedback_summary=request.feedback_summary,
         ),
     )

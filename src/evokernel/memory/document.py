@@ -15,10 +15,16 @@ def build_memory_document(item: MemoryItem) -> str:
     ]
     if item.context_summary:
         parts.append(f"context={item.context_summary}")
+    if item.parent_memory_id:
+        parts.append(f"parent_memory_id={item.parent_memory_id}")
     if item.verifier_outcome.feedback_summary:
         parts.append(f"feedback={item.verifier_outcome.feedback_summary}")
     if item.verifier_outcome.error_category:
         parts.append(f"error={item.verifier_outcome.error_category}")
+    if item.verifier_outcome.bottleneck_label:
+        parts.append(f"bottleneck={item.verifier_outcome.bottleneck_label}")
+    if item.verifier_outcome.profiler_summary:
+        parts.append(f"profile={item.verifier_outcome.profiler_summary}")
     parts.append("code:")
     parts.append(item.code)
     return "\n".join(parts)
@@ -35,6 +41,8 @@ def build_retrieval_query(
     keywords: list[str] | None = None,
     error_category: str | None = None,
     feedback_summary: str | None = None,
+    bottleneck_label: str | None = None,
+    profiler_summary: str | None = None,
     start_point: MemoryItem | None = None,
 ) -> str:
     parts = [
@@ -51,11 +59,19 @@ def build_retrieval_query(
         parts.append(f"error={error_category}")
     if feedback_summary:
         parts.append(f"feedback={feedback_summary}")
+    if bottleneck_label:
+        parts.append(f"bottleneck={bottleneck_label}")
+    if profiler_summary:
+        parts.append(f"profile={profiler_summary}")
     if start_point is not None:
         parts.append(f"start_point_summary={start_point.summary}")
         parts.append(
             "start_point_feedback="
             f"{start_point.verifier_outcome.feedback_summary or 'none'}"
+        )
+        parts.append(
+            "start_point_bottleneck="
+            f"{start_point.verifier_outcome.bottleneck_label or 'none'}"
         )
         parts.append("start_point_code:")
         parts.append(start_point.code)

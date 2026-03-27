@@ -5,7 +5,10 @@ from typing import Any
 from evokernel.domain.models import VerificationOutcome
 from evokernel.verifier.anti_hack import check_for_disallowed_patterns
 from evokernel.verifier.correctness import compare_outputs
-from evokernel.verifier.profiling import aggregate_latency_measurements
+from evokernel.verifier.profiling import (
+    aggregate_latency_measurements,
+    diagnose_performance,
+)
 
 
 def verify_candidate(
@@ -25,6 +28,9 @@ def verify_candidate(
             compile_passed=False,
             correctness_passed=False,
             latency_ms=None,
+            bottleneck_label=None,
+            profiler_summary=None,
+            latency_ratio_to_target=None,
             error_category=anti_hack.error_category,
             feedback_summary=anti_hack.feedback_summary,
         )
@@ -46,6 +52,9 @@ def verify_candidate(
             compile_passed=False,
             correctness_passed=False,
             latency_ms=None,
+            bottleneck_label=None,
+            profiler_summary=None,
+            latency_ratio_to_target=None,
             error_category=category,
             feedback_summary=summary,
         )
@@ -57,6 +66,9 @@ def verify_candidate(
             compile_passed=True,
             correctness_passed=False,
             latency_ms=None,
+            bottleneck_label=None,
+            profiler_summary=None,
+            latency_ratio_to_target=None,
             error_category="missing_correctness_cases",
             feedback_summary="task defines no correctness cases",
         )
@@ -75,6 +87,9 @@ def verify_candidate(
                 compile_passed=True,
                 correctness_passed=False,
                 latency_ms=None,
+                bottleneck_label=None,
+                profiler_summary=None,
+                latency_ratio_to_target=None,
                 error_category=category,
                 feedback_summary=summary,
             )
@@ -93,6 +108,9 @@ def verify_candidate(
             compile_passed=True,
             correctness_passed=False,
             latency_ms=None,
+            bottleneck_label=None,
+            profiler_summary=None,
+            latency_ratio_to_target=None,
             error_category="wrong_answer",
             feedback_summary=f"case {case_index}: {summary}",
         )
@@ -121,16 +139,31 @@ def verify_candidate(
                 compile_passed=True,
                 correctness_passed=False,
                 latency_ms=None,
+                bottleneck_label=None,
+                profiler_summary=None,
+                latency_ratio_to_target=None,
                 error_category=category,
                 feedback_summary=summary,
             )
         latency_ms = aggregate_latency_measurements(samples)
+    bottleneck_label = None
+    profiler_summary = None
+    latency_ratio_to_target = None
+    if latency_ms is not None:
+        (
+            bottleneck_label,
+            profiler_summary,
+            latency_ratio_to_target,
+        ) = diagnose_performance(task=task, latency_ms=latency_ms)
 
     return VerificationOutcome(
         anti_hack_passed=True,
         compile_passed=True,
         correctness_passed=True,
         latency_ms=latency_ms,
+        bottleneck_label=bottleneck_label,
+        profiler_summary=profiler_summary,
+        latency_ratio_to_target=latency_ratio_to_target,
         error_category=None,
         feedback_summary=None,
     )

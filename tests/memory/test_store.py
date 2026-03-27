@@ -61,6 +61,9 @@ def test_memory_store_persists_attempts_and_start_points():
             compile_passed=True,
             correctness_passed=True,
             latency_ms=1.2,
+            bottleneck_label="reduction_folding",
+            profiler_summary="Profiler diagnosis: likely bottleneck=reduction_folding.",
+            latency_ratio_to_target=40.0,
             error_category=None,
             feedback_summary="ok",
         ),
@@ -178,7 +181,11 @@ def test_memory_item_rejects_infeasible_start_point():
 def test_memory_store_sqlite_round_trip(tmp_path):
     path = tmp_path / "memory.sqlite3"
     writer = InMemoryStore(path)
-    writer.add(_build_memory_item(memory_id="persisted"))
+    writer.add(
+        _build_memory_item(memory_id="persisted").model_copy(
+            update={"parent_memory_id": "seed-parent"}
+        )
+    )
     writer.close()
 
     reader = InMemoryStore(path, reuse_existing=True)
@@ -186,6 +193,7 @@ def test_memory_store_sqlite_round_trip(tmp_path):
 
     assert len(recalled) == 1
     assert recalled[0].summary == "summary-persisted"
+    assert recalled[0].parent_memory_id == "seed-parent"
     reader.close()
 
 
@@ -271,3 +279,22 @@ def test_ingest_seed_memory_is_idempotent_for_stable_seed_ids(tmp_path):
     assert first_ids == second_ids
     assert len(persisted) == len(first_ids)
     store.close()
+
+
+def test_memory_store_can_filter_by_parent_memory_id():
+    store = InMemoryStore()
+    store.add(_build_memory_item(memory_id="root"))
+    store.add(
+        _build_memory_item(memory_id="child-a").model_copy(
+            update={"parent_memory_id": "root"}
+        )
+    )
+    store.add(
+        _build_memory_item(memory_id="child-b").model_copy(
+            update={"parent_memory_id": "root"}
+        )
+    )
+
+    children = store.recall(parent_memory_id="root")
+
+    assert [item.memory_id for item in children] == ["child-a", "child-b"]

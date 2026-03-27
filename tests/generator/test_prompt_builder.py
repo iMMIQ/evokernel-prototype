@@ -13,6 +13,7 @@ def test_build_generation_prompt_includes_stage_constraints_and_feedback():
         backend_constraints=["emit a C entrypoint", "use SIMD intrinsics"],
         retrieved_context=["failure: missing include", "api: use __m256"],
         api_knowledge_context=["header: immintrin.h", "entrypoint: evokernel_entry"],
+        profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
         feedback_summary="previous compile error: unknown intrinsic",
     )
 
@@ -21,6 +22,7 @@ def test_build_generation_prompt_includes_stage_constraints_and_feedback():
     assert "use SIMD intrinsics" in prompt
     assert "API Knowledge" in prompt
     assert "evokernel_entry" in prompt
+    assert "Profiler Diagnosis" in prompt
 
 
 def test_load_system_prompt_falls_back_when_prompt_file_is_unavailable(monkeypatch):

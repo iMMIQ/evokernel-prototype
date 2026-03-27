@@ -64,4 +64,7 @@ def test_verify_candidate_profiles_first_randomized_case():
     assert outcome.compile_passed is True
     assert outcome.correctness_passed is True
     assert outcome.latency_ms == 2.0
+    assert outcome.bottleneck_label == "vectorization_gap"
+    assert outcome.profiler_summary is not None
+    assert outcome.latency_ratio_to_target is not None
     assert backend.measured_case == task.randomized_inputs[0]

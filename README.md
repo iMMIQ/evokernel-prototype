@@ -27,7 +27,8 @@ Approach with Application to NPU Kernel Synthesis* 中 EvoKernel 工作流的核
 - memory store、seed knowledge 注入、state signature、recall policy、Q-value 更新
 - OpenAI-compatible 生成器客户端与 prompt builder
 - CPU SIMD backend 协议与 benchmark task 注册表
-- anti-hack、correctness、compile/runtime error、latency 聚合等 verifier
+- anti-hack、correctness、compile/runtime error、latency 聚合与 bottleneck 诊断
+  verifier
 - drafting / refining orchestrator 与 run report
 - CLI 入口与本地 deterministic 验证路径
 - CPU SIMD 端到端集成测试与共享 memory 复用测试
@@ -86,7 +87,8 @@ tests/
    驱动完整的 episode：
    - drafting：先找到第一个可行解；经验记忆走 value-driven 检索，API knowledge
      走单独的 backend-aware 通道
-   - refining：从可行起点继续优化
+   - refining：从可行起点继续优化，并使用 profiler/bottleneck 诊断、observable
+     child variant 和补充高性能变体来组织上下文
    - reward 更新与 run-report 生成
 
 6. `cli`
@@ -238,6 +240,8 @@ uv run python -m evokernel.cli \
 - CPU SIMD 编译、执行与 latency 测量
 - anti-hack 规则检查
 - correctness mismatch 摘要与 profiling 聚合
+- profiler diagnosis、bottleneck-conditioned refining retrieval 与 child-variant
+  context
 - drafting 到 refining 的状态切换
 - CPU SIMD CLI 路径与 shared-memory reuse 的端到端验证
 
@@ -258,6 +262,8 @@ uv run pytest tests/backend/test_cpu_simd_backend.py -v
   memory 纳入当前检索视野，但每次运行产生的新 memory 和 `Q1/Q2` 都会写回共享库。
 - 当前已经有 `M0` 风格的 typed seed knowledge 与 drafting 阶段的 hybrid retrieval，
   但仍然是轻量实现：API knowledge 主要来自仓库内置 seed bundle，而不是外部文档管线。
+- refining 已经接入 profiler/bottleneck 条件化检索，但 bottleneck 诊断仍然是基于
+  benchmark baseline 和规则的轻量推断，不是真实硬件 profiler 事件分析。
 - `deterministic-test` 生成器路径本质上是仓库内的 dev/test 路径，不是通用生产
   generator 实现。
 - 当前只实现了 CPU SIMD backend，还没有 Ascend/CUDA 风格后端。

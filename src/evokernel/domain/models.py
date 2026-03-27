@@ -27,6 +27,9 @@ class VerificationOutcome(BaseModel):
     compile_passed: bool
     correctness_passed: bool
     latency_ms: float | None
+    bottleneck_label: str | None = None
+    profiler_summary: str | None = None
+    latency_ratio_to_target: float | None = None
     error_category: str | None
     feedback_summary: str | None
 
@@ -63,6 +66,7 @@ class MemoryItem(BaseModel):
     became_start_point: bool
     verifier_outcome: VerificationOutcome
     parent_attempt_id: str | None = None
+    parent_memory_id: str | None = None
     retrieval_text: str | None = None
     embedding: list[float] = Field(default_factory=list, exclude=True)
 

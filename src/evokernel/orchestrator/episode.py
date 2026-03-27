@@ -94,6 +94,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
             api_knowledge_context=_build_api_knowledge_context(
                 context_selection.api_knowledge_items
             ),
+            profiler_summary=_resolve_profiler_summary(start_point),
             feedback_summary=last_feedback,
         )
         generation = runtime.generator.generate(request)
@@ -137,6 +138,9 @@ def run_episode(runtime, task_id: str) -> RunReport:
                     memory_to_attempt.get(start_point.memory_id)
                     if start_point is not None
                     else None
+                ),
+                parent_memory_id=(
+                    start_point.memory_id if start_point is not None else None
                 ),
             )
         )
@@ -243,6 +247,8 @@ def _select_experiential_context(
         keywords=list(task.prompt_metadata.get("keywords", [])),
         error_category=error_category,
         feedback_summary=feedback_summary,
+        bottleneck_label=_resolve_bottleneck_label(start_point),
+        profiler_summary=_resolve_profiler_summary(start_point),
         start_point=start_point,
     )
     query_embedding = runtime.embedder.embed_texts([query_text])[0]
@@ -264,6 +270,11 @@ def _select_experiential_context(
         final_context_count=retrieval_config.final_context_count,
         over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
     )
+    if stage == Stage.REFINING and start_point is not None:
+        recalled = _rerank_refinement_candidates(
+            recalled,
+            start_point=start_point,
+        )
     return select_context_items(
         candidates=recalled,
         stage=stage,
@@ -445,10 +456,18 @@ def _build_retrieved_context(
 ) -> list[str]:
     retrieved_context: list[str] = []
     if start_point is not None:
+        profiler_summary = (
+            start_point.verifier_outcome.profiler_summary or "none"
+        )
+        bottleneck_label = (
+            start_point.verifier_outcome.bottleneck_label or "none"
+        )
         retrieved_context.append(
             "Start point:\n"
             f"memory_id={start_point.memory_id}\n"
             f"summary={start_point.summary}\n"
+            f"bottleneck={bottleneck_label}\n"
+            f"profile={profiler_summary}\n"
             f"code={start_point.code}"
         )
 
@@ -456,10 +475,16 @@ def _build_retrieved_context(
     for item in selected_context:
         if item.memory_id in seen_memory_ids:
             continue
+        label = _label_refinement_item(
+            item=item,
+            start_point=start_point,
+        )
         retrieved_context.append(
-            "Context:\n"
+            f"{label}:\n"
             f"memory_id={item.memory_id}\n"
+            f"kind={item.memory_kind}\n"
             f"summary={item.summary}\n"
+            f"bottleneck={item.verifier_outcome.bottleneck_label or 'none'}\n"
             f"feedback={item.verifier_outcome.feedback_summary or 'none'}"
         )
         seen_memory_ids.add(item.memory_id)
@@ -528,6 +553,94 @@ def _is_better_candidate(
     if candidate_latency is None:
         return False
     return candidate_latency < current_latency
+
+
+def _resolve_bottleneck_label(start_point: MemoryItem | None) -> str | None:
+    if start_point is None:
+        return None
+    return start_point.verifier_outcome.bottleneck_label
+
+
+def _resolve_profiler_summary(start_point: MemoryItem | None) -> str | None:
+    if start_point is None:
+        return None
+    return start_point.verifier_outcome.profiler_summary
+
+
+def _rerank_refinement_candidates(
+    candidates: list[MemoryItem],
+    *,
+    start_point: MemoryItem,
+) -> list[MemoryItem]:
+    target_bottleneck = start_point.verifier_outcome.bottleneck_label
+    start_latency = start_point.verifier_outcome.latency_ms
+    indexed = {item.memory_id: index for index, item in enumerate(candidates)}
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            _is_observable_child(item, start_point=start_point),
+            _matches_bottleneck(item, target_bottleneck),
+            _is_complementary_high_performing_variant(
+                item,
+                start_point=start_point,
+                start_latency=start_latency,
+            ),
+            item.is_feasible,
+            -indexed[item.memory_id],
+        ),
+        reverse=True,
+    )
+    return ranked
+
+
+def _is_observable_child(item: MemoryItem, *, start_point: MemoryItem) -> bool:
+    return item.parent_memory_id == start_point.memory_id
+
+
+def _matches_bottleneck(
+    item: MemoryItem,
+    target_bottleneck: str | None,
+) -> bool:
+    if target_bottleneck is None:
+        return False
+    if item.verifier_outcome.bottleneck_label == target_bottleneck:
+        return True
+    haystack = f"{item.summary}\n{item.retrieval_text or ''}".lower()
+    return target_bottleneck.lower() in haystack
+
+
+def _is_complementary_high_performing_variant(
+    item: MemoryItem,
+    *,
+    start_point: MemoryItem,
+    start_latency: float | None,
+) -> bool:
+    if not item.is_feasible:
+        return False
+    if item.task_id != start_point.task_id:
+        return False
+    latency = item.verifier_outcome.latency_ms
+    if start_latency is None or latency is None:
+        return False
+    return latency < start_latency
+
+
+def _label_refinement_item(
+    *,
+    item: MemoryItem,
+    start_point: MemoryItem | None,
+) -> str:
+    if start_point is not None and item.parent_memory_id == start_point.memory_id:
+        return "Observable Child Variant"
+    if item.memory_kind == "refinement_hint":
+        return "Refinement Hint"
+    if (
+        start_point is not None
+        and item.is_feasible
+        and item.task_id == start_point.task_id
+    ):
+        return "Complementary Variant"
+    return "Context"
 
 
 def _extract_api_terms(task, experiential_items: list[MemoryItem]) -> set[str]:

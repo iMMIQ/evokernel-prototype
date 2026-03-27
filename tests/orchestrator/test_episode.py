@@ -246,6 +246,94 @@ def test_run_episode_separates_api_knowledge_from_experiential_context():
     assert "API Knowledge" not in "\n".join(first_request.retrieved_context)
 
 
+def test_run_episode_passes_profiler_summary_into_refining_request():
+    runtime = _build_fake_runtime(
+        {
+            "draft-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=2.0,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=40.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+            "refine-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.0,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=20.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        },
+        attempt_budget=2,
+    )
+
+    run_episode(runtime, task_id="vector_add")
+
+    refining_request = runtime.generator.calls[1]
+
+    assert refining_request.stage == "refining"
+    assert "vectorization_gap" in (refining_request.profiler_summary or "")
+
+
+def test_run_episode_surfaces_observable_child_variants_in_refining_context():
+    runtime = _build_fake_runtime(
+        {
+            "draft-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=2.0,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=40.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+            "refine-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=False,
+                latency_ms=None,
+                bottleneck_label=None,
+                profiler_summary=None,
+                latency_ratio_to_target=None,
+                error_category="wrong_answer",
+                feedback_summary="tail cleanup regressed",
+            ),
+            "refine-2": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.8,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=36.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        },
+        attempt_budget=3,
+    )
+
+    run_episode(runtime, task_id="vector_add")
+
+    third_request = runtime.generator.calls[2]
+
+    assert third_request.stage == "refining"
+    assert any(
+        "Observable Child Variant" in entry
+        for entry in third_request.retrieved_context
+    )
+
+
 def _build_runtime_memory_item(memory_id: str):
     return MemoryItem(
         memory_id=memory_id,

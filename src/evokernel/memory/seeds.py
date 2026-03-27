@@ -175,6 +175,101 @@ def _build_cpu_simd_seed_memory(
             ),
             stage=Stage.REFINING,
         ),
+        _build_seed_item(
+            memory_id="seed:cpu_simd:hint:refinement:vectorization_gap",
+            operator_family="general",
+            summary="When SIMD utilization is low, widen the vector loop and keep tail handling explicit.",
+            memory_kind="refinement_hint",
+            retrieval_text=(
+                "backend=cpu_simd\n"
+                "memory_kind=refinement_hint\n"
+                "bottleneck=vectorization_gap\n"
+                "keywords=simd,vectorization,intrinsics,tail cleanup\n"
+                "summary=Check whether the hot loop uses wide vector loads/stores and"
+                " whether alignment assumptions are preventing vectorization."
+            ),
+            code=(
+                "// Prefer the widest safe intrinsic path first.\n"
+                "// Keep scalar cleanup only for the remaining tail."
+            ),
+            stage=Stage.REFINING,
+        ),
+        _build_seed_item(
+            memory_id="seed:cpu_simd:hint:refinement:memory_bandwidth",
+            operator_family="elementwise",
+            summary="For memory-bound kernels, minimize extra passes and keep accesses contiguous.",
+            memory_kind="refinement_hint",
+            retrieval_text=(
+                "backend=cpu_simd\n"
+                "memory_kind=refinement_hint\n"
+                "bottleneck=memory_bandwidth\n"
+                "keywords=contiguous loads,streaming,memory traffic\n"
+                "summary=Avoid redundant loads and stores, fuse loops when possible,"
+                " and keep accesses sequential."
+            ),
+            code=(
+                "// Reduce memory traffic and preserve contiguous access.\n"
+                "// Avoid temporary buffers in the hot path."
+            ),
+            stage=Stage.REFINING,
+        ),
+        _build_seed_item(
+            memory_id="seed:cpu_simd:hint:refinement:reduction_folding",
+            operator_family="reduction",
+            summary="For reductions, keep partial sums in registers and delay the final fold.",
+            memory_kind="refinement_hint",
+            retrieval_text=(
+                "backend=cpu_simd\n"
+                "memory_kind=refinement_hint\n"
+                "bottleneck=reduction_folding\n"
+                "keywords=horizontal reduction,partial sum,accumulator\n"
+                "summary=Use multiple accumulators, fold them late, and avoid serial"
+                " scalar reductions inside the hot loop."
+            ),
+            code=(
+                "// Accumulate into vector registers first.\n"
+                "// Perform the horizontal fold after the main loop."
+            ),
+            stage=Stage.REFINING,
+        ),
+        _build_seed_item(
+            memory_id="seed:cpu_simd:hint:refinement:cache_locality",
+            operator_family="matmul",
+            summary="For matmul-like kernels, tune blocking and reuse tiles from cache.",
+            memory_kind="refinement_hint",
+            retrieval_text=(
+                "backend=cpu_simd\n"
+                "memory_kind=refinement_hint\n"
+                "bottleneck=cache_locality\n"
+                "keywords=tiling,blocking,cache reuse,matmul\n"
+                "summary=Choose tiles that fit cache and keep the packed working set"
+                " stable across inner-loop iterations."
+            ),
+            code=(
+                "// Tune tile sizes around cache capacity.\n"
+                "// Reuse loaded tiles before advancing."
+            ),
+            stage=Stage.REFINING,
+        ),
+        _build_seed_item(
+            memory_id="seed:cpu_simd:hint:refinement:normalization_stats",
+            operator_family="normalization",
+            summary="For normalization kernels, fuse statistics and affine work carefully.",
+            memory_kind="refinement_hint",
+            retrieval_text=(
+                "backend=cpu_simd\n"
+                "memory_kind=refinement_hint\n"
+                "bottleneck=normalization_stats\n"
+                "keywords=mean,variance,layernorm,fused stats\n"
+                "summary=Reuse computed statistics, avoid recomputing passes, and keep"
+                " the normalization and affine steps adjacent."
+            ),
+            code=(
+                "// Reuse mean/variance across the row.\n"
+                "// Fuse affine application after normalization when safe."
+            ),
+            stage=Stage.REFINING,
+        ),
     ]
     return items
 

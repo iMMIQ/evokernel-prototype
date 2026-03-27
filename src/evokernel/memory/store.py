@@ -28,10 +28,17 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             became_start_point INTEGER NOT NULL,
             verifier_outcome_json TEXT NOT NULL,
             parent_attempt_id TEXT,
+            parent_memory_id TEXT,
             retrieval_text TEXT NOT NULL,
             embedding_json TEXT NOT NULL
         )
         """
+    )
+    _ensure_column(
+        connection,
+        table="memory_items",
+        column="parent_memory_id",
+        definition="TEXT",
     )
     connection.execute(
         """
@@ -40,6 +47,21 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         """
     )
     connection.commit()
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    *,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(str(row[1]) == column for row in rows):
+        return
+    connection.execute(
+        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    )
 
 
 class InMemoryStore:
@@ -98,9 +120,10 @@ class InMemoryStore:
                 became_start_point,
                 verifier_outcome_json,
                 parent_attempt_id,
+                parent_memory_id,
                 retrieval_text,
                 embedding_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 persisted_item.memory_id,
@@ -117,6 +140,7 @@ class InMemoryStore:
                 int(persisted_item.became_start_point),
                 verifier_payload,
                 persisted_item.parent_attempt_id,
+                persisted_item.parent_memory_id,
                 retrieval_text,
                 json.dumps(embedding),
             ),
@@ -134,6 +158,7 @@ class InMemoryStore:
         memory_kind: str | None = None,
         is_feasible: bool | None = None,
         became_start_point: bool | None = None,
+        parent_memory_id: str | None = None,
         exclude_memory_ids: set[str] | None = None,
     ) -> list[MemoryItem]:
         visible_ids = self._visible_memory_ids()
@@ -161,6 +186,9 @@ class InMemoryStore:
         if became_start_point is not None:
             clauses.append("became_start_point = ?")
             parameters.append(int(became_start_point))
+        if parent_memory_id is not None:
+            clauses.append("parent_memory_id = ?")
+            parameters.append(parent_memory_id)
 
         excluded_ids = set(exclude_memory_ids or ())
         if not self._reuse_existing:
@@ -286,6 +314,7 @@ class InMemoryStore:
             became_start_point=bool(row["became_start_point"]),
             verifier_outcome=json.loads(str(row["verifier_outcome_json"])),
             parent_attempt_id=row["parent_attempt_id"],
+            parent_memory_id=row["parent_memory_id"],
             retrieval_text=str(row["retrieval_text"]),
             embedding=[
                 float(component)
