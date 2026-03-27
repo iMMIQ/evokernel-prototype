@@ -12,6 +12,7 @@ class ConfigModel(BaseModel):
 
 
 class RetrievalConfig(ConfigModel):
+    policy: str = "value_driven"
     final_context_count: int = 4
     over_retrieval_lambda: int = 3
     epsilon: float = 0.1

@@ -11,7 +11,10 @@ from evokernel.generator.base import GenerationRequest
 from evokernel.memory.document import build_retrieval_query
 from evokernel.memory.state_signature import build_state_signature
 from evokernel.orchestrator.run_report import AttemptRecord, RunReport
-from evokernel.retrieval.policy import select_context_items
+from evokernel.retrieval.policy import (
+    select_context_items_by_policy,
+    select_start_point_by_policy,
+)
 from evokernel.retrieval.recall import recall_candidates
 from evokernel.verifier.core import verify_candidate
 
@@ -43,6 +46,9 @@ class _OnlineRewardNormalizer:
 class _ContextSelection:
     experiential_items: list[MemoryItem]
     api_knowledge_items: list[MemoryItem]
+    observable_child_items: list[MemoryItem]
+    refinement_hint_items: list[MemoryItem]
+    complementary_variant_items: list[MemoryItem]
 
 
 def run_episode(runtime, task_id: str) -> RunReport:
@@ -83,7 +89,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
         )
 
         retrieved_context = _build_retrieved_context(
-            selected_context=context_selection.experiential_items,
+            context_selection=context_selection,
             start_point=start_point,
         )
         request = GenerationRequest(
@@ -126,8 +132,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
                     latency_ms=verifier_outcome.latency_ms,
                 ),
                 context_summary=_build_context_summary(
-                    experiential_context=context_selection.experiential_items,
-                    api_knowledge_context=context_selection.api_knowledge_items,
+                    context_selection=context_selection,
                     start_point=start_point,
                 ),
                 reward=reward,
@@ -163,13 +168,8 @@ def run_episode(runtime, task_id: str) -> RunReport:
                 stage=stage,
                 reward=reward,
                 verifier_outcome=verifier_outcome,
-                selected_context_ids=[
-                    item.memory_id
-                    for item in (
-                        context_selection.experiential_items
-                        + context_selection.api_knowledge_items
-                    )
-                ],
+                selected_context_ids=_collect_selected_context_ids(context_selection),
+                context_role_ids=_build_context_role_ids(context_selection),
                 start_point_id=(
                     start_point.memory_id if start_point is not None else None
                 ),
@@ -199,6 +199,17 @@ def _select_context(
     feedback_summary: str | None,
     start_point: MemoryItem | None,
 ) -> _ContextSelection:
+    if stage == Stage.REFINING and start_point is not None:
+        return _select_refinement_context(
+            runtime=runtime,
+            task=task,
+            state_signature=state_signature,
+            shape_bucket=shape_bucket,
+            error_category=error_category,
+            feedback_summary=feedback_summary,
+            start_point=start_point,
+        )
+
     experiential_items = _select_experiential_context(
         runtime=runtime,
         task=task,
@@ -223,6 +234,9 @@ def _select_context(
     return _ContextSelection(
         experiential_items=experiential_items,
         api_knowledge_items=api_knowledge_items,
+        observable_child_items=[],
+        refinement_hint_items=[],
+        complementary_variant_items=[],
     )
 
 
@@ -270,18 +284,124 @@ def _select_experiential_context(
         final_context_count=retrieval_config.final_context_count,
         over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
     )
-    if stage == Stage.REFINING and start_point is not None:
-        recalled = _rerank_refinement_candidates(
-            recalled,
-            start_point=start_point,
-        )
-    return select_context_items(
+    return select_context_items_by_policy(
         candidates=recalled,
+        policy=retrieval_config.policy,
         stage=stage,
         state_signature=state_signature,
         q_store=runtime.q_store,
         final_context_count=retrieval_config.final_context_count,
         epsilon=retrieval_config.epsilon,
+    )
+
+
+def _select_refinement_context(
+    runtime,
+    task,
+    state_signature: str,
+    shape_bucket: str,
+    error_category: str | None,
+    feedback_summary: str | None,
+    start_point: MemoryItem,
+) -> _ContextSelection:
+    retrieval_config = runtime.config.retrieval
+    query_embedding = runtime.embedder.embed_texts(
+        [
+            build_retrieval_query(
+                backend_id=runtime.backend_id,
+                task_id=task.task_id,
+                operator_family=task.operator_family,
+                task_summary=task.summary,
+                stage=Stage.REFINING,
+                shape_bucket=shape_bucket,
+                keywords=list(task.prompt_metadata.get("keywords", [])),
+                error_category=error_category,
+                feedback_summary=feedback_summary,
+                bottleneck_label=_resolve_bottleneck_label(start_point),
+                profiler_summary=_resolve_profiler_summary(start_point),
+                start_point=start_point,
+            )
+        ]
+    )[0]
+
+    child_candidates = runtime.memory_store.recall(
+        task_id=task.task_id,
+        backend_id=runtime.backend_id,
+        parent_memory_id=start_point.memory_id,
+        exclude_memory_ids={start_point.memory_id},
+    )
+    hint_candidates = [
+        item
+        for item in runtime.memory_store.recall(
+            backend_id=runtime.backend_id,
+            memory_kind="refinement_hint",
+            exclude_memory_ids={start_point.memory_id},
+        )
+        if item.operator_family in {"general", task.operator_family}
+    ]
+    complementary_candidates = _collect_complementary_variant_candidates(
+        runtime=runtime,
+        task=task,
+        start_point=start_point,
+    )
+
+    child_budget, hint_budget, complementary_budget = _allocate_refinement_budgets(
+        total_budget=retrieval_config.final_context_count,
+        has_child_candidates=bool(child_candidates),
+        has_hint_candidates=bool(hint_candidates),
+        has_complementary_candidates=bool(complementary_candidates),
+    )
+
+    observable_child_items = _select_candidates_with_q(
+        candidates=child_candidates,
+        query_embedding=query_embedding,
+        policy=retrieval_config.policy,
+        stage=Stage.REFINING,
+        state_signature=state_signature,
+        q_store=runtime.q_store,
+        final_context_count=child_budget,
+        epsilon=retrieval_config.epsilon,
+        over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
+    )
+    refinement_hint_items = _select_candidates_with_q(
+        candidates=_rank_refinement_hint_candidates(
+            hint_candidates,
+            start_point=start_point,
+        ),
+        query_embedding=query_embedding,
+        policy=retrieval_config.policy,
+        stage=Stage.REFINING,
+        state_signature=state_signature,
+        q_store=runtime.q_store,
+        final_context_count=hint_budget,
+        epsilon=retrieval_config.epsilon,
+        over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
+    )
+    complementary_variant_items = _select_candidates_with_q(
+        candidates=_rank_complementary_candidates(
+            complementary_candidates,
+            start_point=start_point,
+        ),
+        query_embedding=query_embedding,
+        policy=retrieval_config.policy,
+        stage=Stage.REFINING,
+        state_signature=state_signature,
+        q_store=runtime.q_store,
+        final_context_count=complementary_budget,
+        epsilon=retrieval_config.epsilon,
+        over_retrieval_lambda=retrieval_config.over_retrieval_lambda,
+    )
+    experiential_items = [
+        *observable_child_items,
+        *refinement_hint_items,
+        *complementary_variant_items,
+    ]
+    return _ContextSelection(
+        experiential_items=experiential_items,
+        api_knowledge_items=[],
+        observable_child_items=observable_child_items,
+        refinement_hint_items=refinement_hint_items,
+        complementary_variant_items=complementary_variant_items,
     )
 
 
@@ -342,17 +462,14 @@ def _select_start_point(runtime, task, state_signature: str) -> MemoryItem | Non
     if not start_points:
         return None
 
-    selected = select_context_items(
+    return select_start_point_by_policy(
         candidates=start_points,
+        policy=runtime.config.retrieval.policy,
         stage=Stage.REFINING,
         state_signature=state_signature,
         q_store=runtime.q_store,
-        final_context_count=1,
         epsilon=runtime.config.retrieval.epsilon,
     )
-    if not selected:
-        return None
-    return selected[0]
 
 
 def _verify(runtime, task, candidate_code: str, attempt_id: str):
@@ -451,7 +568,7 @@ def _get_backend_constraints(runtime, task) -> list[str]:
 
 
 def _build_retrieved_context(
-    selected_context: list[MemoryItem],
+    context_selection: _ContextSelection,
     start_point: MemoryItem | None,
 ) -> list[str]:
     retrieved_context: list[str] = []
@@ -471,22 +588,36 @@ def _build_retrieved_context(
             f"code={start_point.code}"
         )
 
+    if start_point is not None and (
+        context_selection.observable_child_items
+        or context_selection.refinement_hint_items
+        or context_selection.complementary_variant_items
+    ):
+        retrieved_context.extend(
+            _format_context_bucket(
+                "Observable Child Variant",
+                context_selection.observable_child_items,
+            )
+        )
+        retrieved_context.extend(
+            _format_context_bucket(
+                "Refinement Hint",
+                context_selection.refinement_hint_items,
+            )
+        )
+        retrieved_context.extend(
+            _format_context_bucket(
+                "Complementary Variant",
+                context_selection.complementary_variant_items,
+            )
+        )
+        return retrieved_context
+
     seen_memory_ids = {start_point.memory_id} if start_point is not None else set()
-    for item in selected_context:
+    for item in context_selection.experiential_items:
         if item.memory_id in seen_memory_ids:
             continue
-        label = _label_refinement_item(
-            item=item,
-            start_point=start_point,
-        )
-        retrieved_context.append(
-            f"{label}:\n"
-            f"memory_id={item.memory_id}\n"
-            f"kind={item.memory_kind}\n"
-            f"summary={item.summary}\n"
-            f"bottleneck={item.verifier_outcome.bottleneck_label or 'none'}\n"
-            f"feedback={item.verifier_outcome.feedback_summary or 'none'}"
-        )
+        retrieved_context.extend(_format_context_bucket("Context", [item]))
         seen_memory_ids.add(item.memory_id)
     return retrieved_context
 
@@ -504,25 +635,77 @@ def _build_api_knowledge_context(items: list[MemoryItem]) -> list[str]:
 
 
 def _build_context_summary(
-    experiential_context: list[MemoryItem],
-    api_knowledge_context: list[MemoryItem],
+    context_selection: _ContextSelection,
     start_point: MemoryItem | None,
 ) -> str | None:
     parts: list[str] = []
     if start_point is not None:
         parts.append(f"start_point={start_point.memory_id}")
-    if experiential_context:
+    if context_selection.experiential_items:
         parts.append(
-            "context=" + ",".join(item.memory_id for item in experiential_context)
+            "context="
+            + ",".join(
+                item.memory_id for item in context_selection.experiential_items
+            )
         )
-    if api_knowledge_context:
+    if context_selection.api_knowledge_items:
         parts.append(
             "api_knowledge="
-            + ",".join(item.memory_id for item in api_knowledge_context)
+            + ",".join(
+                item.memory_id for item in context_selection.api_knowledge_items
+            )
         )
+    role_ids = _build_context_role_ids(context_selection)
+    for role, ids in role_ids.items():
+        if role in {"context", "api_knowledge"}:
+            continue
+        parts.append(role + "=" + ",".join(ids))
     if not parts:
         return None
     return " | ".join(parts)
+
+
+def _build_context_role_ids(
+    context_selection: _ContextSelection,
+) -> dict[str, list[str]]:
+    role_ids: dict[str, list[str]] = {}
+    if context_selection.api_knowledge_items:
+        role_ids["api_knowledge"] = [
+            item.memory_id for item in context_selection.api_knowledge_items
+        ]
+    if context_selection.observable_child_items:
+        role_ids["observable_child"] = [
+            item.memory_id for item in context_selection.observable_child_items
+        ]
+    if context_selection.refinement_hint_items:
+        role_ids["refinement_hint"] = [
+            item.memory_id for item in context_selection.refinement_hint_items
+        ]
+    if context_selection.complementary_variant_items:
+        role_ids["complementary_variant"] = [
+            item.memory_id
+            for item in context_selection.complementary_variant_items
+        ]
+    if (
+        context_selection.experiential_items
+        and not role_ids
+    ):
+        role_ids["context"] = [
+            item.memory_id for item in context_selection.experiential_items
+        ]
+    return role_ids
+
+
+def _collect_selected_context_ids(
+    context_selection: _ContextSelection,
+) -> list[str]:
+    return [
+        item.memory_id
+        for item in (
+            context_selection.experiential_items
+            + context_selection.api_knowledge_items
+        )
+    ]
 
 
 def _build_attempt_summary(
@@ -555,6 +738,144 @@ def _is_better_candidate(
     return candidate_latency < current_latency
 
 
+def _format_context_bucket(
+    label: str,
+    items: list[MemoryItem],
+) -> list[str]:
+    return [
+        (
+            f"{label}:\n"
+            f"memory_id={item.memory_id}\n"
+            f"kind={item.memory_kind}\n"
+            f"summary={item.summary}\n"
+            f"bottleneck={item.verifier_outcome.bottleneck_label or 'none'}\n"
+            f"feedback={item.verifier_outcome.feedback_summary or 'none'}"
+        )
+        for item in items
+    ]
+
+
+def _allocate_refinement_budgets(
+    *,
+    total_budget: int,
+    has_child_candidates: bool,
+    has_hint_candidates: bool,
+    has_complementary_candidates: bool,
+) -> tuple[int, int, int]:
+    child_budget = min(1, total_budget) if has_child_candidates else 0
+    remaining = max(total_budget - child_budget, 0)
+    hint_budget = min(1, remaining) if has_hint_candidates else 0
+    remaining = max(remaining - hint_budget, 0)
+    complementary_budget = min(remaining, remaining) if has_complementary_candidates else 0
+    if complementary_budget == 0 and remaining > 0:
+        if has_hint_candidates and hint_budget > 0:
+            hint_budget += remaining
+        elif has_child_candidates and child_budget > 0:
+            child_budget += remaining
+    return child_budget, hint_budget, complementary_budget
+
+
+def _select_candidates_with_q(
+    *,
+    candidates: list[MemoryItem],
+    query_embedding,
+    policy: str,
+    stage: Stage,
+    state_signature: str,
+    q_store,
+    final_context_count: int,
+    epsilon: float,
+    over_retrieval_lambda: int,
+) -> list[MemoryItem]:
+    if final_context_count <= 0 or not candidates:
+        return []
+    recalled = recall_candidates(
+        items=candidates,
+        query_embedding=query_embedding,
+        final_context_count=final_context_count,
+        over_retrieval_lambda=over_retrieval_lambda,
+    )
+    return select_context_items_by_policy(
+        candidates=recalled,
+        policy=policy,
+        stage=stage,
+        state_signature=state_signature,
+        q_store=q_store,
+        final_context_count=final_context_count,
+        epsilon=epsilon,
+    )
+
+
+def _collect_complementary_variant_candidates(
+    *,
+    runtime,
+    task,
+    start_point: MemoryItem,
+) -> list[MemoryItem]:
+    start_latency = start_point.verifier_outcome.latency_ms
+    candidates: list[MemoryItem] = []
+    for item in runtime.memory_store.recall(
+        backend_id=runtime.backend_id,
+        is_feasible=True,
+        exclude_memory_ids={start_point.memory_id},
+    ):
+        if item.memory_kind == "backend_knowledge":
+            continue
+        if item.memory_kind == "refinement_hint":
+            continue
+        if item.operator_family != task.operator_family:
+            continue
+        latency = item.verifier_outcome.latency_ms
+        if (
+            item.task_id == task.task_id
+            and start_latency is not None
+            and latency is not None
+            and latency >= start_latency
+        ):
+            continue
+        candidates.append(item)
+    return candidates
+
+
+def _rank_refinement_hint_candidates(
+    candidates: list[MemoryItem],
+    *,
+    start_point: MemoryItem,
+) -> list[MemoryItem]:
+    target_bottleneck = start_point.verifier_outcome.bottleneck_label
+    return sorted(
+        candidates,
+        key=lambda item: (
+            _matches_bottleneck(item, target_bottleneck),
+            item.operator_family == start_point.operator_family,
+            item.memory_id,
+        ),
+        reverse=True,
+    )
+
+
+def _rank_complementary_candidates(
+    candidates: list[MemoryItem],
+    *,
+    start_point: MemoryItem,
+) -> list[MemoryItem]:
+    start_latency = start_point.verifier_outcome.latency_ms
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item.task_id == start_point.task_id,
+            _matches_bottleneck(item, start_point.verifier_outcome.bottleneck_label),
+            _is_complementary_high_performing_variant(
+                item,
+                start_point=start_point,
+                start_latency=start_latency,
+            ),
+            item.memory_id,
+        ),
+        reverse=True,
+    )
+
+
 def _resolve_bottleneck_label(start_point: MemoryItem | None) -> str | None:
     if start_point is None:
         return None
@@ -565,32 +886,6 @@ def _resolve_profiler_summary(start_point: MemoryItem | None) -> str | None:
     if start_point is None:
         return None
     return start_point.verifier_outcome.profiler_summary
-
-
-def _rerank_refinement_candidates(
-    candidates: list[MemoryItem],
-    *,
-    start_point: MemoryItem,
-) -> list[MemoryItem]:
-    target_bottleneck = start_point.verifier_outcome.bottleneck_label
-    start_latency = start_point.verifier_outcome.latency_ms
-    indexed = {item.memory_id: index for index, item in enumerate(candidates)}
-    ranked = sorted(
-        candidates,
-        key=lambda item: (
-            _is_observable_child(item, start_point=start_point),
-            _matches_bottleneck(item, target_bottleneck),
-            _is_complementary_high_performing_variant(
-                item,
-                start_point=start_point,
-                start_latency=start_latency,
-            ),
-            item.is_feasible,
-            -indexed[item.memory_id],
-        ),
-        reverse=True,
-    )
-    return ranked
 
 
 def _is_observable_child(item: MemoryItem, *, start_point: MemoryItem) -> bool:
@@ -623,24 +918,6 @@ def _is_complementary_high_performing_variant(
     if start_latency is None or latency is None:
         return False
     return latency < start_latency
-
-
-def _label_refinement_item(
-    *,
-    item: MemoryItem,
-    start_point: MemoryItem | None,
-) -> str:
-    if start_point is not None and item.parent_memory_id == start_point.memory_id:
-        return "Observable Child Variant"
-    if item.memory_kind == "refinement_hint":
-        return "Refinement Hint"
-    if (
-        start_point is not None
-        and item.is_feasible
-        and item.task_id == start_point.task_id
-    ):
-        return "Complementary Variant"
-    return "Context"
 
 
 def _extract_api_terms(task, experiential_items: list[MemoryItem]) -> set[str]:

@@ -143,6 +143,7 @@ def _write_run_report(*, artifact_dir: Path, report, runtime) -> None:
     payload = {
         "task_id": report.task_id,
         "backend_id": report.backend_id,
+        "retrieval_policy": runtime.config.retrieval.policy,
         "attempts": [
             {
                 "attempt_id": attempt.attempt_id,
@@ -151,6 +152,10 @@ def _write_run_report(*, artifact_dir: Path, report, runtime) -> None:
                 "reward": attempt.reward,
                 "verifier_outcome": attempt.verifier_outcome.model_dump(mode="json"),
                 "selected_context_ids": list(attempt.selected_context_ids),
+                "context_role_ids": {
+                    key: list(value)
+                    for key, value in attempt.context_role_ids.items()
+                },
                 "start_point_id": attempt.start_point_id,
             }
             for attempt in report.attempts

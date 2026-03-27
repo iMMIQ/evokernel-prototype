@@ -199,6 +199,7 @@ uv run python -m evokernel.cli \
 `run_report.json` 里会包含：
 
 - task 和 backend 标识
+- 本次运行使用的 retrieval policy
 - 每次 attempt 的摘要
 - best candidate 信息
 - 已加载 memory 数量
@@ -209,6 +210,7 @@ uv run python -m evokernel.cli \
 `configs/default.toml` 与 `configs/cpu_simd.toml` 当前主要定义：
 
 - retrieval 参数：
+  - `policy`
   - `final_context_count`
   - `over_retrieval_lambda`
   - `epsilon`
@@ -235,7 +237,8 @@ uv run python -m evokernel.cli \
 - package import 与 CLI smoke 行为
 - config 解析与校验
 - memory 持久化、Q-value 持久化与原子导出
-- dense retrieval、hybrid drafting retrieval 与 epsilon-greedy 选择
+- dense retrieval、hybrid drafting retrieval 与 heuristic/value-driven policy
+  切换
 - prompt 构建与 OpenAI-compatible HTTP 请求
 - CPU SIMD 编译、执行与 latency 测量
 - anti-hack 规则检查

@@ -34,6 +34,8 @@ def test_cpu_simd_pipeline_runs_vector_add(
     )
     assert report["task_id"] == "vector_add"
     assert report["best_candidate"] is not None
+    assert report["retrieval_policy"] == "value_driven"
+    assert "context_role_ids" in report["attempts"][0]
     candidate_code = (
         tmp_path
         / "artifacts"

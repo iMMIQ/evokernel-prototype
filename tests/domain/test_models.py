@@ -8,12 +8,13 @@ from evokernel.domain.models import EpisodeState, VerificationOutcome
 def test_load_runtime_config_reads_lambda_multiplier(tmp_path):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        "[retrieval]\nfinal_context_count=4\nover_retrieval_lambda=3\n",
+        "[retrieval]\npolicy=\"heuristic\"\nfinal_context_count=4\nover_retrieval_lambda=3\n",
         encoding="utf-8",
     )
 
     config = load_runtime_config(config_path)
 
+    assert config.retrieval.policy == "heuristic"
     assert config.retrieval.over_retrieval_lambda == 3
 
 

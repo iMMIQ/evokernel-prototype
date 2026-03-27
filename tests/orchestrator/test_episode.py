@@ -48,6 +48,7 @@ def _build_fake_runtime(
         verifier=verifier,
         config=SimpleNamespace(
             retrieval=SimpleNamespace(
+                policy="value_driven",
                 final_context_count=2,
                 over_retrieval_lambda=2,
                 epsilon=0.0,
@@ -244,6 +245,7 @@ def test_run_episode_separates_api_knowledge_from_experiential_context():
     assert first_request.api_knowledge_context
     assert first_request.retrieved_context
     assert "API Knowledge" not in "\n".join(first_request.retrieved_context)
+    assert "api_knowledge" in report.attempts[0].context_role_ids
 
 
 def test_run_episode_passes_profiler_summary_into_refining_request():
@@ -323,15 +325,94 @@ def test_run_episode_surfaces_observable_child_variants_in_refining_context():
         attempt_budget=3,
     )
 
-    run_episode(runtime, task_id="vector_add")
+    report = run_episode(runtime, task_id="vector_add")
 
     third_request = runtime.generator.calls[2]
+    third_attempt = report.attempts[2]
 
     assert third_request.stage == "refining"
     assert any(
         "Observable Child Variant" in entry
         for entry in third_request.retrieved_context
     )
+    assert "observable_child" in third_attempt.context_role_ids
+
+
+def test_run_episode_heuristic_policy_chooses_best_latency_start_point():
+    runtime = _build_fake_runtime(
+        {
+            "draft-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=2.0,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=40.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+            "refine-1": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.6,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=32.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        },
+        attempt_budget=2,
+    )
+    runtime.config.retrieval.policy = "heuristic"
+
+    start_point_a = _build_runtime_memory_item("start-a").model_copy(
+        update={
+            "task_id": "vector_add",
+            "is_feasible": True,
+            "became_start_point": True,
+            "verifier_outcome": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.8,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=36.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        }
+    )
+    start_point_b = _build_runtime_memory_item("start-b").model_copy(
+        update={
+            "task_id": "vector_add",
+            "is_feasible": True,
+            "became_start_point": True,
+            "verifier_outcome": VerificationOutcome(
+                anti_hack_passed=True,
+                compile_passed=True,
+                correctness_passed=True,
+                latency_ms=1.2,
+                bottleneck_label="vectorization_gap",
+                profiler_summary="Profiler diagnosis: likely bottleneck=vectorization_gap.",
+                latency_ratio_to_target=24.0,
+                error_category=None,
+                feedback_summary=None,
+            ),
+        }
+    )
+    runtime.memory_store.add(start_point_a)
+    runtime.memory_store.add(start_point_b)
+
+    report = run_episode(runtime, task_id="vector_add")
+
+    refining_attempt = next(
+        attempt for attempt in report.attempts if attempt.stage == "refining"
+    )
+    assert refining_attempt.start_point_id == "start-b"
 
 
 def _build_runtime_memory_item(memory_id: str):

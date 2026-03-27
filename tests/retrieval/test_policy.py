@@ -2,7 +2,11 @@ import pytest
 
 from evokernel.domain.enums import Stage
 from evokernel.domain.models import MemoryItem, VerificationOutcome
-from evokernel.retrieval.policy import select_context_items
+from evokernel.retrieval.policy import (
+    select_context_items,
+    select_context_items_by_policy,
+    select_start_point_by_policy,
+)
 from evokernel.retrieval.q_store import QValueStore
 from evokernel.retrieval.recall import recall_candidates
 
@@ -156,3 +160,64 @@ def test_select_context_items_prefers_high_q_items_when_epsilon_zero(memory_item
         epsilon=0.0,
     )
     assert [item.summary for item in selected] == ["best", "second"]
+
+
+def test_select_context_items_by_policy_heuristic_uses_similarity_order(memory_items):
+    q_store = QValueStore()
+    q_store.set(
+        stage=Stage.DRAFTING,
+        state_signature="sig",
+        memory_id="fourth-id",
+        value=9.0,
+    )
+
+    selected = select_context_items_by_policy(
+        candidates=memory_items,
+        policy="heuristic",
+        stage=Stage.DRAFTING,
+        state_signature="sig",
+        q_store=q_store,
+        final_context_count=2,
+        epsilon=0.0,
+    )
+
+    assert [item.memory_id for item in selected] == ["best-id", "second-id"]
+
+
+def test_select_start_point_by_policy_heuristic_uses_best_latency(memory_items):
+    q_store = QValueStore()
+    q_store.set(
+        stage=Stage.REFINING,
+        state_signature="sig",
+        memory_id="best-id",
+        value=-1.0,
+    )
+    q_store.set(
+        stage=Stage.REFINING,
+        state_signature="sig",
+        memory_id="second-id",
+        value=5.0,
+    )
+    start_points = [
+        memory_items[0],
+        memory_items[1].model_copy(
+            update={
+                "memory_id": "fastest-id",
+                "verifier_outcome": memory_items[1].verifier_outcome.model_copy(
+                    update={"latency_ms": 0.5}
+                ),
+            }
+        ),
+    ]
+
+    selected = select_start_point_by_policy(
+        candidates=start_points,
+        policy="heuristic",
+        stage=Stage.REFINING,
+        state_signature="sig",
+        q_store=q_store,
+        epsilon=0.0,
+    )
+
+    assert selected is not None
+    assert selected.memory_id == "fastest-id"

@@ -1,4 +1,5 @@
 [retrieval]
+policy = "value_driven"
 final_context_count = 4
 over_retrieval_lambda = 3
 epsilon = 0.1

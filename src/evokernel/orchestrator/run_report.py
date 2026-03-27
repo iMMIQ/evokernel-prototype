@@ -14,6 +14,7 @@ class AttemptRecord:
     reward: float
     verifier_outcome: VerificationOutcome
     selected_context_ids: list[str] = field(default_factory=list)
+    context_role_ids: dict[str, list[str]] = field(default_factory=dict)
     start_point_id: str | None = None
 
 
