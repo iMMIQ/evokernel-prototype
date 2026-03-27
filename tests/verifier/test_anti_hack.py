@@ -12,6 +12,13 @@ def test_anti_hack_rejects_numpy_shortcuts():
     assert result.error_category == "anti_hack"
 
 
+def test_anti_hack_rejects_unaliased_numpy_shortcuts():
+    result = check_for_disallowed_patterns("import numpy\nnumpy.add(a, b)")
+
+    assert result.passed is False
+    assert result.error_category == "anti_hack"
+
+
 def test_anti_hack_allows_plain_candidate_code():
     result = check_for_disallowed_patterns(
         'extern "C" void evokernel_entry() {}'

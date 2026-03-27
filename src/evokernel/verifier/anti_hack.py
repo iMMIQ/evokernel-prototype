@@ -13,11 +13,15 @@ class AntiHackResult:
 
 _DISALLOWED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
-        re.compile(r"\bimport\s+numpy\s+as\s+np\b|\bfrom\s+numpy\s+import\b"),
+        re.compile(
+            r"\bimport\s+numpy(?:\s+as\s+np)?\b|\bfrom\s+numpy\s+import\b"
+        ),
         "numpy imports are disallowed in candidate code",
     ),
     (
-        re.compile(r"\bnp\.(?:add|sum|matmul|dot|mean|var|sqrt|linalg)\b"),
+        re.compile(
+            r"\b(?:np|numpy)\.(?:add|sum|matmul|dot|mean|var|sqrt|linalg)\b"
+        ),
         "numpy shortcut operations are disallowed in candidate code",
     ),
     (
