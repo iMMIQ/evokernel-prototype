@@ -163,7 +163,7 @@ def run_episode(runtime, task_id: str) -> RunReport:
 def _select_context(runtime, task, stage: Stage, state_signature: str) -> list[MemoryItem]:
     retrieval_config = runtime.config.retrieval
     recalled = recall_candidates(
-        items=runtime.memory_store.recall(task.task_id),
+        items=_build_context_candidate_pool(runtime, task.task_id),
         operator_family=task.operator_family,
         backend_id=runtime.backend_id,
         stage=Stage.DRAFTING if stage == Stage.DRAFTING else None,
@@ -178,6 +178,25 @@ def _select_context(runtime, task, stage: Stage, state_signature: str) -> list[M
         final_context_count=retrieval_config.final_context_count,
         epsilon=retrieval_config.epsilon,
     )
+
+
+def _build_context_candidate_pool(runtime, task_id: str) -> list[MemoryItem]:
+    combined_items: list[MemoryItem] = []
+    seen_memory_ids: set[str] = set()
+
+    for item in runtime.memory_store.recall(task_id):
+        if item.memory_id in seen_memory_ids:
+            continue
+        combined_items.append(item)
+        seen_memory_ids.add(item.memory_id)
+
+    for item in getattr(runtime, "loaded_memory_items", []):
+        if item.memory_id in seen_memory_ids:
+            continue
+        combined_items.append(item)
+        seen_memory_ids.add(item.memory_id)
+
+    return combined_items
 
 
 def _select_start_point(runtime, task, state_signature: str) -> MemoryItem | None:
