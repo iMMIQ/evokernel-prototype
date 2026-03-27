@@ -82,15 +82,19 @@ def _build_generator(
     generator_name: str | None,
     config: AppConfig,
 ):
-    if generator_name == "deterministic-test":
+    resolved_generator = generator_name or config.generator.provider
+
+    if resolved_generator == "deterministic-test":
         try:
-            override = GENERATOR_OVERRIDES[generator_name]
+            override = GENERATOR_OVERRIDES[resolved_generator]
         except KeyError as exc:
             raise ValueError(
                 "generator override required for deterministic-test"
             ) from exc
         return override(config) if callable(override) else override
-    return OpenAICompatibleGenerator.from_config(config.generator)
+    if resolved_generator == "openai_compatible":
+        return OpenAICompatibleGenerator.from_config(config.generator)
+    raise ValueError(f"Unsupported generator: {resolved_generator}")
 
 
 def _write_run_report(*, artifact_dir: Path, report, runtime) -> None:

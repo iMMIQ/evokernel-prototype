@@ -132,3 +132,23 @@ def test_cpu_simd_pipeline_reuses_memory_across_two_tasks(tmp_path, monkeypatch)
     )
     assert second_report["memory"]["loaded_item_count"] > 0
     assert second_report["memory"]["reused_memory_ids"]
+
+
+def test_cpu_simd_pipeline_rejects_unsupported_generator_name(
+    tmp_path, capsys
+):
+    exit_code = main(
+        [
+            "--config",
+            "configs/cpu_simd.toml",
+            "--task",
+            "vector_add",
+            "--generator",
+            "unsupported-generator",
+            "--work-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert "unsupported generator" in capsys.readouterr().err.lower()
