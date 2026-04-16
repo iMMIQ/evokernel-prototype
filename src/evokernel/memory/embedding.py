@@ -55,10 +55,10 @@ class OpenAICompatibleTextEmbedder:
         cls,
         config: EmbeddingConfig,
     ) -> "OpenAICompatibleTextEmbedder":
-        api_key = os.getenv(config.api_key_env)
+        api_key = config.api_key or os.getenv(config.api_key_env)
         if not api_key:
             raise ValueError(
-                f"Missing API key environment variable: {config.api_key_env}"
+                f"Missing API key: set api_key in config or {config.api_key_env} env var"
             )
         base_url = config.base_url or "https://api.openai.com/v1"
         dimensions = config.dimensions

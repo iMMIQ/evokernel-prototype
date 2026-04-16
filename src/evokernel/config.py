@@ -23,6 +23,7 @@ class EmbeddingConfig(ConfigModel):
     provider: str = "hashing"
     model: str = "text-embedding-3-large"
     base_url: str | None = None
+    api_key: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     dimensions: int | None = None
 
@@ -31,6 +32,7 @@ class GeneratorConfig(ConfigModel):
     provider: str = "openai_compatible"
     model: str = "gpt-5.4"
     base_url: str | None = None
+    api_key: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
 
 

@@ -14,14 +14,14 @@ class OpenAICompatibleGenerator:
     model: str
     base_url: str
     api_key: str
-    timeout: float = 30.0
+    timeout: float = 120.0
 
     @classmethod
     def from_config(cls, config: GeneratorConfig) -> "OpenAICompatibleGenerator":
-        api_key = os.getenv(config.api_key_env)
+        api_key = config.api_key or os.getenv(config.api_key_env)
         if not api_key:
             raise ValueError(
-                f"Missing API key environment variable: {config.api_key_env}"
+                f"Missing API key: set api_key in config or {config.api_key_env} env var"
             )
         base_url = config.base_url or "https://api.openai.com/v1"
         return cls(model=config.model, base_url=base_url, api_key=api_key)
@@ -29,9 +29,9 @@ class OpenAICompatibleGenerator:
     def build_payload(self, system_prompt: str, user_prompt: str) -> dict:
         return {
             "model": self.model,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
-                {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ],
         }
 
@@ -44,16 +44,16 @@ class OpenAICompatibleGenerator:
 
     def generate_from_prompts(self, system_prompt: str, user_prompt: str) -> GenerationResult:
         payload = self.build_payload(system_prompt=system_prompt, user_prompt=user_prompt)
-        response_json = self._post_responses(payload)
+        response_json = self._post_chat_completions(payload)
         return GenerationResult(
             code=self._extract_output_text(response_json),
             raw_response=response_json,
         )
 
-    def _post_responses(self, payload: dict) -> dict:
+    def _post_chat_completions(self, payload: dict) -> dict:
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(
-                f"{self.base_url.rstrip('/')}/responses",
+                f"{self.base_url.rstrip('/')}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
@@ -64,16 +64,14 @@ class OpenAICompatibleGenerator:
             return response.json()
 
     def _extract_output_text(self, response_json: dict) -> str:
-        texts: list[str] = []
-        for output_item in response_json.get("output", []):
-            for content_item in output_item.get("content", []):
-                if content_item.get("type") == "output_text":
-                    text = content_item.get("text")
-                    if isinstance(text, str):
-                        texts.append(text)
-        code = "\n".join(texts).strip()
-        if not code:
-            raise ValueError("No usable output_text found in provider response")
+        choices = response_json.get("choices", [])
+        if not choices:
+            raise ValueError("No choices found in provider response")
+        message = choices[0].get("message", {})
+        content = message.get("content")
+        if not content:
+            raise ValueError("No content found in provider response")
+        code = content.strip()
         code = _strip_code_fences(code)
         return code
 

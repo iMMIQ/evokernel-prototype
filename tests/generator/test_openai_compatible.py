@@ -7,7 +7,7 @@ from evokernel.generator.openai_compatible import (
 )
 
 
-def test_openai_compatible_generator_builds_responses_payload():
+def test_openai_compatible_generator_builds_chat_completions_payload():
     generator = OpenAICompatibleGenerator(
         model="gpt-5.4",
         base_url="https://example.invalid/v1",
@@ -17,20 +17,18 @@ def test_openai_compatible_generator_builds_responses_payload():
     payload = generator.build_payload(system_prompt="sys", user_prompt="usr")
 
     assert payload["model"] == "gpt-5.4"
-    assert payload["input"][0]["role"] == "system"
+    assert payload["messages"][0] == {"role": "system", "content": "sys"}
+    assert payload["messages"][1] == {"role": "user", "content": "usr"}
 
 
 def test_openai_compatible_generator_generate_uses_http_client(httpx_mock):
     httpx_mock.add_response(
         json={
-            "output": [
+            "choices": [
                 {
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": "void evokernel_entry() {}",
-                        }
-                    ]
+                    "message": {
+                        "content": "void evokernel_entry() {}",
+                    }
                 }
             ]
         }
@@ -45,15 +43,21 @@ def test_openai_compatible_generator_generate_uses_http_client(httpx_mock):
 
     assert "evokernel_entry" in result.code
     request = httpx_mock.get_requests()[0]
-    assert str(request.url) == "https://example.invalid/v1/responses"
+    assert str(request.url) == "https://example.invalid/v1/chat/completions"
     assert request.headers["Authorization"] == "Bearer test"
     assert request.headers["Content-Type"] == "application/json"
-    assert request.read().decode("utf-8") == (
-        '{"model":"gpt-5.4","input":['
-        '{"role":"system","content":[{"type":"input_text","text":"sys"}]},'
-        '{"role":"user","content":[{"type":"input_text","text":"usr"}]}'
-        "]}"
+
+
+def test_openai_compatible_generator_from_config_prefers_direct_key():
+    generator = OpenAICompatibleGenerator.from_config(
+        GeneratorConfig(
+            model="gpt-5.4",
+            base_url="https://example.invalid/v1",
+            api_key="direct-key",
+            api_key_env="MISSING_TEST_API_KEY",
+        )
     )
+    assert generator.api_key == "direct-key"
 
 
 def test_openai_compatible_generator_from_config_requires_api_key_env(monkeypatch):
@@ -69,11 +73,11 @@ def test_openai_compatible_generator_from_config_requires_api_key_env(monkeypatc
         )
 
 
-def test_openai_compatible_generator_generate_fails_when_response_has_no_output_text(
+def test_openai_compatible_generator_generate_fails_when_no_content(
     httpx_mock,
 ):
     httpx_mock.add_response(
-        json={"output": [{"content": [{"type": "refusal", "text": "no"}]}]}
+        json={"choices": [{"message": {"content": None}}]}
     )
     generator = OpenAICompatibleGenerator(
         model="gpt-5.4",
@@ -81,7 +85,7 @@ def test_openai_compatible_generator_generate_fails_when_response_has_no_output_
         api_key="test",
     )
 
-    with pytest.raises(ValueError, match="No usable output_text"):
+    with pytest.raises(ValueError, match="No content found"):
         generator.generate_from_prompts(system_prompt="sys", user_prompt="usr")
 
 
@@ -100,14 +104,11 @@ def test_strip_code_fences_no_fence():
 def test_generator_strips_markdown_code_fences(httpx_mock):
     httpx_mock.add_response(
         json={
-            "output": [
+            "choices": [
                 {
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": "```cpp\nvoid evokernel_entry() {}\n```",
-                        }
-                    ]
+                    "message": {
+                        "content": "```cpp\nvoid evokernel_entry() {}\n```",
+                    }
                 }
             ]
         }
