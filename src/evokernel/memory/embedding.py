@@ -61,7 +61,7 @@ class OpenAICompatibleTextEmbedder:
                 f"Missing API key environment variable: {config.api_key_env}"
             )
         base_url = config.base_url or "https://api.openai.com/v1"
-        dimensions = config.dimensions if config.dimensions > 0 else None
+        dimensions = config.dimensions
         return cls(
             model=config.model,
             base_url=base_url,
@@ -107,7 +107,7 @@ class OpenAICompatibleTextEmbedder:
 
 def build_text_embedder(config: EmbeddingConfig) -> TextEmbedder:
     if config.provider == "hashing":
-        return HashingTextEmbedder(dimensions=config.dimensions)
+        return HashingTextEmbedder()
     if config.provider == "openai_compatible":
         return OpenAICompatibleTextEmbedder.from_config(config)
     raise ValueError(f"Unsupported embedding provider: {config.provider}")

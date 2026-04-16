@@ -24,7 +24,7 @@ class EmbeddingConfig(ConfigModel):
     model: str = "text-embedding-3-large"
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
-    dimensions: int = 256
+    dimensions: int | None = None
 
 
 class GeneratorConfig(ConfigModel):
