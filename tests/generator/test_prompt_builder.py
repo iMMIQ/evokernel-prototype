@@ -34,4 +34,4 @@ def test_load_system_prompt_falls_back_when_prompt_file_is_unavailable(monkeypat
     prompt = load_system_prompt("drafting")
 
     assert "drafting" in prompt.lower()
-    assert "return code only" in prompt.lower()
+    assert "raw source code only" in prompt.lower()

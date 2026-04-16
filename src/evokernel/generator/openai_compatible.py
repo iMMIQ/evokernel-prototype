@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -73,4 +74,17 @@ class OpenAICompatibleGenerator:
         code = "\n".join(texts).strip()
         if not code:
             raise ValueError("No usable output_text found in provider response")
+        code = _strip_code_fences(code)
         return code
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove surrounding markdown code fences if present."""
+    match = re.match(r"^```[\w]*\n(.*?)```\s*$", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Handle leading fence without closing
+    match = re.match(r"^```[\w]*\n(.*)", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text

@@ -1,7 +1,10 @@
 import pytest
 
 from evokernel.config import GeneratorConfig
-from evokernel.generator.openai_compatible import OpenAICompatibleGenerator
+from evokernel.generator.openai_compatible import (
+    OpenAICompatibleGenerator,
+    _strip_code_fences,
+)
 
 
 def test_openai_compatible_generator_builds_responses_payload():
@@ -80,3 +83,41 @@ def test_openai_compatible_generator_generate_fails_when_response_has_no_output_
 
     with pytest.raises(ValueError, match="No usable output_text"):
         generator.generate_from_prompts(system_prompt="sys", user_prompt="usr")
+
+
+def test_strip_code_fences_removes_wrapping_fences():
+    assert _strip_code_fences("```c\nvoid foo() {}\n```") == "void foo() {}"
+
+
+def test_strip_code_fences_removes_cpp_fence():
+    assert _strip_code_fences("```cpp\nint x;\n```") == "int x;"
+
+
+def test_strip_code_fences_no_fence():
+    assert _strip_code_fences("void foo() {}") == "void foo() {}"
+
+
+def test_generator_strips_markdown_code_fences(httpx_mock):
+    httpx_mock.add_response(
+        json={
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "```cpp\nvoid evokernel_entry() {}\n```",
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+    generator = OpenAICompatibleGenerator(
+        model="gpt-5.4",
+        base_url="https://example.invalid/v1",
+        api_key="test",
+    )
+
+    result = generator.generate_from_prompts(system_prompt="sys", user_prompt="usr")
+
+    assert result.code == "void evokernel_entry() {}"

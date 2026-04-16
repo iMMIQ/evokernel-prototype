@@ -7,19 +7,27 @@ PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 FALLBACK_SYSTEM_PROMPTS = {
     "drafting": (
         "You are drafting a candidate EvoKernel implementation.\n\n"
-        "Return code only.\n"
         "Produce a complete C/C++ kernel candidate that follows the backend "
         "constraints exactly.\n"
         "Prefer simple, correct code over speculative optimizations when "
-        "context is incomplete."
+        "context is incomplete.\n\n"
+        "Output rules:\n"
+        "- Output raw source code only — no markdown, no code fences, "
+        "no explanation.\n"
+        "- Do NOT wrap code in ```c, ```cpp, or any other fence markers.\n"
+        "- Do NOT include any text before or after the code."
     ),
     "refining": (
         "You are refining an existing EvoKernel implementation.\n\n"
-        "Return code only.\n"
         "Use retrieved context and verifier feedback to correct failures or "
         "improve the candidate while preserving the task goal.\n"
         "Keep changes targeted to the reported issues unless the context "
-        "requires a broader fix."
+        "requires a broader fix.\n\n"
+        "Output rules:\n"
+        "- Output raw source code only — no markdown, no code fences, "
+        "no explanation.\n"
+        "- Do NOT wrap code in ```c, ```cpp, or any other fence markers.\n"
+        "- Do NOT include any text before or after the code."
     ),
 }
 
