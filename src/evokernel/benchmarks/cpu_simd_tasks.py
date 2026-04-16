@@ -30,6 +30,7 @@ def build_vector_add_task() -> BenchmarkTask:
     return BenchmarkTask(
         task_id="vector_add",
         operator_family="elementwise",
+        difficulty=1,
         summary="Add two float32 vectors with CPU SIMD-friendly contiguous inputs.",
         reference_impl=_vector_add_reference,
         randomized_inputs=[
@@ -57,6 +58,7 @@ def build_reduce_sum_task() -> BenchmarkTask:
     return BenchmarkTask(
         task_id="reduce_sum",
         operator_family="reduction",
+        difficulty=1,
         summary="Reduce a float32 vector to a scalar sum.",
         reference_impl=_reduce_sum_reference,
         randomized_inputs=[
@@ -75,6 +77,7 @@ def build_matmul_tiled_task() -> BenchmarkTask:
     return BenchmarkTask(
         task_id="matmul_tiled",
         operator_family="matmul",
+        difficulty=2,
         summary="Multiply two float32 matrices using cache-friendly tiling.",
         reference_impl=_matmul_tiled_reference,
         randomized_inputs=[
@@ -120,6 +123,7 @@ def build_layernorm_task() -> BenchmarkTask:
     return BenchmarkTask(
         task_id="layernorm",
         operator_family="normalization",
+        difficulty=2,
         summary="Apply float32 layer normalization over the trailing axis.",
         reference_impl=_layernorm_reference,
         randomized_inputs=[

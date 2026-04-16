@@ -480,11 +480,13 @@ def _verify(runtime, task, candidate_code: str, attempt_id: str):
             candidate_code=candidate_code,
             attempt_id=attempt_id,
         )
+    inspector = getattr(runtime, "inspector", None)
     return verify_candidate(
         backend=runtime.backend,
         task=task,
         candidate_code=candidate_code,
         attempt_id=attempt_id,
+        inspector=inspector,
     )
 
 

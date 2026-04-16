@@ -29,3 +29,14 @@ def list_benchmark_tasks() -> list[BenchmarkTask]:
         build_matmul_tiled_task(),
         build_layernorm_task(),
     ]
+
+
+def list_tasks_by_difficulty(difficulty: int | None = None) -> list[BenchmarkTask]:
+    all_tasks = list_benchmark_tasks()
+    if difficulty is None:
+        return all_tasks
+    return [t for t in all_tasks if t.difficulty == difficulty]
+
+
+def get_all_task_ids() -> list[str]:
+    return [t.task_id for t in list_benchmark_tasks()]

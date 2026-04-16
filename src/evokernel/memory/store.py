@@ -243,6 +243,39 @@ class InMemoryStore:
         ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
+    def import_from_store(
+        self,
+        source_path: str | Path,
+        exclude_task_ids: list[str] | None = None,
+    ) -> int:
+        source = Path(source_path)
+        if not source.exists():
+            return 0
+
+        exclude = set(exclude_task_ids or [])
+        existing_ids = self._fetch_all_memory_ids()
+
+        source_conn = sqlite3.connect(source)
+        source_conn.row_factory = sqlite3.Row
+        try:
+            rows = source_conn.execute(
+                "SELECT * FROM memory_items"
+            ).fetchall()
+        finally:
+            source_conn.close()
+
+        imported = 0
+        for row in rows:
+            task_id = row["task_id"]
+            memory_id = row["memory_id"]
+            if task_id in exclude or memory_id in existing_ids:
+                continue
+            item = self._row_to_item(row)
+            self.add(item)
+            imported += 1
+
+        return imported
+
     def save_jsonl(self, path: str | Path) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -40,7 +40,19 @@ class RuntimeConfig(ConfigModel):
     backend: str = "cpu_simd"
     artifact_dir: str = "artifacts"
     log_dir: str = "logs"
-    attempt_budget: int = 3
+    attempt_budget: int = 30
+
+
+class VerifierConfig(ConfigModel):
+    inspector_enabled: bool = False
+    inspector_model: str | None = None
+    inspector_timeout: float = 15.0
+
+
+class CurriculumConfig(ConfigModel):
+    strategy: str = "scratch"
+    source_memory_path: str | None = None
+    exclude_task_ids: list[str] = Field(default_factory=list)
 
 
 class BenchmarkConfig(ConfigModel):
@@ -52,6 +64,8 @@ class AppConfig(ConfigModel):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     generator: GeneratorConfig = Field(default_factory=GeneratorConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
+    curriculum: CurriculumConfig = Field(default_factory=CurriculumConfig)
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
 
 

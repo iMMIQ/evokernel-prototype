@@ -23,4 +23,5 @@ class BenchmarkTask:
     )
     prompt_metadata: dict[str, Any] = field(default_factory=dict)
     baseline_data: dict[str, Any] = field(default_factory=dict)
+    difficulty: int = 1
 

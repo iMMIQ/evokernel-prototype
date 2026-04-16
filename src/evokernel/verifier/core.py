@@ -20,8 +20,12 @@ def verify_candidate(
     warmup_runs: int = 1,
     timed_runs: int = 5,
     profiling_samples: int = 3,
+    inspector: dict[str, Any] | None = None,
 ) -> VerificationOutcome:
-    anti_hack = check_for_disallowed_patterns(candidate_code)
+    anti_hack = check_for_disallowed_patterns(
+        candidate_code,
+        inspector=inspector,
+    )
     if not anti_hack.passed:
         return VerificationOutcome(
             anti_hack_passed=False,
